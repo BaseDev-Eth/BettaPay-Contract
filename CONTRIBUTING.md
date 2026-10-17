@@ -8,6 +8,7 @@ Thank you for contributing to the BettaPay Soroban smart contracts. This guide c
 - [Workspace Configuration](#workspace-configuration)
 - [Getting Started](#getting-started)
 - [Development Workflow](#development-workflow)
+- [Optional: Pre-Commit Hook](#optional-pre-commit-hook)
 - [Upgrades and Storage Migrations](DEVELOPMENT.md)
 - [Testing](#testing)
 - [Building WASM Binaries](#building-wasm-binaries)
@@ -186,6 +187,41 @@ If `cargo` prompts to install the toolchain, accept — `rust-toolchain.toml` ha
 3. **Make focused changes** — keep PRs scoped to a single concern (one contract fix, one feature, or one docs change).
 4. **Run local checks** before pushing (see [Testing](#testing) and [Pull Request Checklist](#pull-request-checklist)).
 5. **Open a pull request** against `main` with a clear description and test plan.
+
+## Optional: Pre-Commit Hook
+
+Contributors can optionally configure a local pre-commit hook to catch formatting and lint errors before committing and pushing.
+
+### Checks Performed
+
+The hook automatically runs:
+- `cargo fmt --all --check`
+- `make clippy` (or `cargo clippy --workspace --lib --all-features`)
+
+The hook is scoped to only run when staged changes include Rust source files (`.rs`), ensuring non-Rust commits (such as documentation or configuration updates) remain fast and unblocked.
+
+### Setup Instructions
+
+You can set up the hook using either native Git hooks or the `pre-commit` framework:
+
+**Option 1: Native Git hook (no extra dependencies)**
+```bash
+git config core.hooksPath .githooks
+chmod +x .githooks/pre-commit
+```
+
+**Option 2: Using `pre-commit`**
+If you have `pre-commit` installed:
+```bash
+pre-commit install
+```
+
+### Skipping the Hook
+
+The hook is strictly optional. If needed, you can bypass the hook using `--no-verify`:
+```bash
+git commit --no-verify -m "commit message"
+```
 
 ## Testing
 

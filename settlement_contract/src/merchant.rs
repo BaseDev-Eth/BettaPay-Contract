@@ -3,14 +3,13 @@ use soroban_sdk::{contractimpl, panic_with_error, Address, Env, Symbol, Vec};
 use bettapay_common::events;
 
 use crate::errors::SettlementError;
+use crate::policy::{MERCHANT_TTL_BUMP, MERCHANT_TTL_THRESHOLD};
 use crate::storage::{
     assert_not_paused, is_merchant_registered_read, read_fallback_rule, read_threshold,
     validate_nonzero_address, verify_admin_auth,
 };
 use crate::types::{DataKey, SettlementRule};
-use crate::{
-    SettlementContract, SettlementContractClient, MERCHANT_TTL_BUMP, MERCHANT_TTL_THRESHOLD,
-};
+use crate::{SettlementContract, SettlementContractClient};
 
 #[contractimpl]
 impl SettlementContract {

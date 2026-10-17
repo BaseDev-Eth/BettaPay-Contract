@@ -9,6 +9,12 @@ use bettapay_common::{
 };
 
 use crate::errors::SettlementError;
+use crate::policy::{
+    BOOTSTRAP_DEFAULT_RULE, CURRENT_SCHEMA_VERSION, DEFAULT_TIMELOCK_DELAY_SECONDS,
+    MAX_SETTLEMENT_DELAY_LEDGER, MERCHANT_TTL_BUMP, MERCHANT_TTL_THRESHOLD,
+    MIN_TIMELOCK_DELAY_SECONDS, RULE_TTL_BUMP, RULE_TTL_THRESHOLD, SCHEDULED_OP_TTL_BUMP,
+    SCHEDULED_OP_TTL_THRESHOLD, SUPPORTED_INTERFACE_VERSION,
+};
 use crate::storage::{
     assert_not_paused, is_merchant_registered_and_bump_ttl, is_merchant_registered_internal,
     read_admin, read_admins, read_fallback_rule, read_governance, read_optional_primary_admin,
@@ -17,17 +23,12 @@ use crate::storage::{
     validate_governance, validate_nonzero_address, verify_admin_auth, write_admins,
 };
 use crate::types::{DataKey, Operation, ScheduledOp, SettlementRule};
-use crate::{
-    SettlementContract, SettlementContractClient, BOOTSTRAP_DEFAULT_RULE, CURRENT_SCHEMA_VERSION,
-    DEFAULT_TIMELOCK_DELAY_SECONDS, MAX_SETTLEMENT_DELAY_LEDGER, MERCHANT_TTL_BUMP,
-    MERCHANT_TTL_THRESHOLD, MIN_TIMELOCK_DELAY_SECONDS, RULE_TTL_BUMP, RULE_TTL_THRESHOLD,
-    SCHEDULED_OP_TTL_BUMP, SCHEDULED_OP_TTL_THRESHOLD,
-};
+use crate::{SettlementContract, SettlementContractClient};
 
 #[contractimpl]
 impl SettlementContract {
     pub fn supports_interface(_env: Env, version: u32) -> bool {
-        version == crate::SUPPORTED_INTERFACE_VERSION
+        version == SUPPORTED_INTERFACE_VERSION
     }
 
     /// Returns the schema version of the deployed build (`CURRENT_SCHEMA_VERSION`).

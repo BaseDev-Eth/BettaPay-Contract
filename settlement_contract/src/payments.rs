@@ -3,17 +3,16 @@ use soroban_sdk::{contractimpl, panic_with_error, Address, BytesN, Env, Symbol, 
 use bettapay_common::{constants::BPS_DENOMINATOR, events};
 
 use crate::errors::SettlementError;
+use crate::policy::{
+    BOOTSTRAP_DEFAULT_RULE, MAX_PAYMENTS_BATCH, PAYMENT_TTL_BUMP, PAYMENT_TTL_THRESHOLD,
+};
 use crate::storage::{
     assert_not_paused, assert_payments_readable, is_merchant_registered_and_bump_ttl,
     is_merchant_registered_internal, read_min_payment_amount, read_rule_or_default,
     read_rule_or_default_no_bump, read_threshold, verify_admin_auth,
 };
 use crate::types::{Bps, DataKey, FeeSplit, PaymentRecord, SettlementRule};
-use crate::BOOTSTRAP_DEFAULT_RULE;
-use crate::{
-    SettlementContract, SettlementContractClient, MAX_PAYMENTS_BATCH, PAYMENT_TTL_BUMP,
-    PAYMENT_TTL_THRESHOLD,
-};
+use crate::{SettlementContract, SettlementContractClient};
 
 /// Computes the platform, network, and merchant fee amounts for an amount using ceil-based rounding.
 ///
