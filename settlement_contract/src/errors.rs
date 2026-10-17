@@ -74,9 +74,9 @@ pub enum SettlementError {
     FeeExceedsGovernanceConfig = 312,
     AmountTooSmall = 313,
     BatchTooLarge = 314,
-    /// The merchant's payment records are orphaned: the merchant was
-    /// unregistered (or never registered), so its payment history is no
-    /// longer readable even if the merchant is later re-registered.
+    /// The merchant's payment records are orphaned while the merchant is
+    /// unregistered or its archive tombstone is present. Re-registration
+    /// clears the tombstone and permits reads of surviving records.
     /// Raised by `get_payment_reference` and `get_payments`.
     PaymentOrphaned = 315,
     /// `schedule()` computed a `sha256(operation)` key that already holds a
