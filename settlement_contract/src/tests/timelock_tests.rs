@@ -1,6 +1,6 @@
 //! Regression coverage for the settlement administrative timelock.
 
-use crate::{Operation, SettlementContractClient, SettlementRule, DEFAULT_TIMELOCK_DELAY_SECONDS};
+use crate::{Operation, SettlementContractClient, SettlementError, SettlementRule, DEFAULT_TIMELOCK_DELAY_SECONDS, MIN_TIMELOCK_DELAY_SECONDS};
 use bettapay_common::constants::RECOVERY_DELAY_SECONDS;
 use soroban_sdk::testutils::{Address as _, Events, Ledger};
 use soroban_sdk::{Address, Env};
@@ -715,4 +715,54 @@ fn execute_unscheduled_operation_returns_operation_not_scheduled() {
 
     // The operation was never scheduled — execute must panic with #11.
     client.execute(&admins.get(0).unwrap(), &operation);
+}
+
+// ---------------------------------------------------------------------------
+// Issue #974: Per-operation delay floor boundary tests
+// ---------------------------------------------------------------------------
+
+/// `schedule` with `execute_in` equal to the floor succeeds and stores a
+/// `ScheduledOp`.
+#[test]
+fn schedule_at_floor_succeeds() {
+    let (env, client, admins, merchant) = setup();
+    let operation = Operation::RegisterMerchant(merchant);
+
+    client.schedule(&admins, &operation, &MIN_TIMELOCK_DELAY_SECONDS);
+
+    // The operation is stored and not yet executable until the delay elapses.
+    assert!(client
+        .try_execute(&admins.get(0).unwrap(), &operation)
+        .is_err());
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp += MIN_TIMELOCK_DELAY_SECONDS);
+    client.execute(&admins.get(0).unwrap(), &operation);
+    assert!(client.is_merchant_registered(&merchant));
+}
+
+/// `schedule` with `execute_in` equal to floor minus one panics with
+/// `ExecutionNotReady` (#10) and does not store the operation.
+#[test]
+fn schedule_below_floor_is_rejected() {
+    let (_env, client, admins, merchant) = setup();
+    let operation = Operation::RegisterMerchant(merchant);
+
+    let result = client.try_schedule(&admins, &operation, &(MIN_TIMELOCK_DELAY_SECONDS - 1));
+    assert_eq!(
+        result.unwrap_err().unwrap(),
+        SettlementError::ExecutionNotReady.into(),
+        "schedule below the delay floor must return ExecutionNotReady"
+    );
+    assert!(!client.is_merchant_registered(&merchant));
+}
+
+/// `schedule` with `execute_in` equal to zero panics with
+/// `ExecutionNotReady` (#10).
+#[test]
+#[should_panic(expected = "Error(Contract, #10)")]
+fn schedule_with_zero_delay_is_rejected() {
+    let (_env, client, admins, merchant) = setup();
+    let operation = Operation::RegisterMerchant(merchant);
+
+    client.schedule(&admins, &operation, &0);
 }

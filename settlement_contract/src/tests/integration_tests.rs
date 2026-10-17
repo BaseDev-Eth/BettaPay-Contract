@@ -1580,3 +1580,131 @@ fn payments_survive_broken_governance_with_cached_config() {
     assert_eq!(record.platform_fee_bps, 250);
     assert_eq!(record.network_fee_bps, 50);
 }
+
+// ---------------------------------------------------------------------------
+// Issue #971: End-to-end payment lifecycle test
+// ---------------------------------------------------------------------------
+
+/// Registers a merchant, sets a merchant-specific settlement rule, stores a
+/// payment, and reads it back — asserting the fee split, the PaymentRecord
+/// snapshot, and the ordered emission of `merchant_registered`,
+/// `settlement_rule_updated`, and `payment_stored` events.
+#[test]
+fn end_to_end_payment_lifecycle_asserts_event_order() {
+    let (env, _gov_client, _gov_admins, settle_client, settle_admins, merchant) = setup_both();
+
+    // 1. Register a merchant.
+    settle_client.register_merchant(&settle_admins, &merchant);
+
+    // 2. Set a merchant-specific settlement rule.
+    let rule = SettlementRule {
+        platform_fee_bps: 250,
+        network_fee_bps: 50,
+        settlement_delay_ledger: 20,
+        auto_settle: false,
+    };
+    settle_client.set_settlement_rule(&settle_admins, &merchant, &rule);
+
+    // 3. Store a payment reference.
+    let reference = BytesN::<32>::from_array(&env, &[42u8; 32]);
+    let amount: i128 = 10_000;
+    let split = settle_client.store_payment_reference(&merchant, &reference, &amount);
+
+    // 4. Assert the fee split matches expectations exactly, printing actual and
+    //    expected amounts on a failing assertion for easy debugging.
+    let denom = 10_000i128;
+    let expected_platform = (amount * rule.platform_fee_bps as i128 + denom - 1) / denom;
+    let expected_network = (amount * rule.network_fee_bps as i128 + denom - 1) / denom;
+    let expected_merchant = (amount - expected_platform - expected_network).max(0);
+    assert_eq!(
+        split.platform_fee_amount, expected_platform,
+        "platform fee mismatch: expected {}, got {}",
+        expected_platform, split.platform_fee_amount
+    );
+    assert_eq!(
+        split.network_fee_amount, expected_network,
+        "network fee mismatch: expected {}, got {}",
+        expected_network, split.network_fee_amount
+    );
+    assert_eq!(
+        split.merchant_amount, expected_merchant,
+        "merchant amount mismatch: expected {}, got {}",
+        expected_merchant, split.merchant_amount
+    );
+    assert_eq!(
+        split.platform_fee_amount + split.network_fee_amount + split.merchant_amount,
+        split.gross_amount,
+        "fee legs plus merchant amount must reconstruct the gross amount"
+    );
+
+    // 5. Read the payment back and assert the PaymentRecord snapshot matches.
+    let record = settle_client
+        .get_payment_reference(&merchant, &reference, &soroban_sdk::vec![&env])
+        .expect("payment record must exist");
+    assert_eq!(record.amount, amount);
+    assert_eq!(record.merchant, merchant);
+    assert_eq!(record.platform_fee_amount, split.platform_fee_amount);
+    assert_eq!(record.network_fee_amount, split.network_fee_amount);
+    assert_eq!(record.merchant_amount, split.merchant_amount);
+    assert_eq!(record.platform_fee_bps, rule.platform_fee_bps);
+    assert_eq!(record.network_fee_bps, rule.network_fee_bps);
+    assert_eq!(record.settlement_delay_ledger, rule.settlement_delay_ledger);
+    assert_eq!(record.auto_settle, rule.auto_settle);
+
+    // 6. Assert the payment_stored event's data payload is the PaymentRecord.
+    let events = env.events().all();
+    let mut payment_stored_found = false;
+    for i in 0..events.len() {
+        let (_contract, event_topics, data) = events.get(i).unwrap();
+        if event_topics.is_empty() {
+            continue;
+        }
+        let sym = Symbol::from_val(&env, &event_topics.get(0).unwrap());
+        if sym == Symbol::new(&env, bettapay_common::events::PAYMENT_STORED_EVENT) {
+            let payload: PaymentRecord = PaymentRecord::try_from_val(&env, data).unwrap();
+            assert_eq!(payload.amount, amount);
+            assert_eq!(payload.merchant, merchant);
+            assert_eq!(payload.platform_fee_amount, split.platform_fee_amount);
+            assert_eq!(payload.network_fee_amount, split.network_fee_amount);
+            assert_eq!(payload.merchant_amount, split.merchant_amount);
+            payment_stored_found = true;
+            break;
+        }
+    }
+    assert!(payment_stored_found, "payment_stored event must be emitted");
+
+    // 7. Assert events are emitted in order:
+    //    merchant_registered -> settlement_rule_updated -> payment_stored.
+    let mut reg_idx: Option<u32> = None;
+    let mut rule_idx: Option<u32> = None;
+    let mut pay_idx: Option<u32> = None;
+    for i in 0..events.len() {
+        let (_contract, event_topics, _data) = events.get(i).unwrap();
+        if event_topics.is_empty() {
+            continue;
+        }
+        let sym = Symbol::from_val(&env, &event_topics.get(0).unwrap());
+        if sym == Symbol::new(&env, bettapay_common::events::MERCHANT_REGISTERED_EVENT) && reg_idx.is_none()
+        {
+            reg_idx = Some(i);
+        }
+        if sym == Symbol::new(&env, bettapay_common::events::SETTLEMENT_RULE_UPDATED_EVENT) && rule_idx.is_none()
+        {
+            rule_idx = Some(i);
+        }
+        if sym == Symbol::new(&env, bettapay_common::events::PAYMENT_STORED_EVENT) && pay_idx.is_none() {
+            pay_idx = Some(i);
+        }
+    }
+    assert!(reg_idx.is_some(), "merchant_registered event must be emitted");
+    assert!(rule_idx.is_some(), "settlement_rule_updated event must be emitted");
+    assert!(pay_idx.is_some(), "payment_stored event must be emitted");
+    assert!(
+        reg_idx.unwrap() < rule_idx.unwrap(),
+        "merchant_registered must precede settlement_rule_updated"
+    );
+    assert!(
+        rule_idx.unwrap() < pay_idx.unwrap(),
+        "settlement_rule_updated must precede payment_stored"
+    );
+}
