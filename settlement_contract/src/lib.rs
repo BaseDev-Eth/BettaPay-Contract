@@ -248,6 +248,8 @@
 
 #![no_std]
 
+extern crate alloc;
+
 mod admin;
 mod errors;
 mod merchant;

@@ -129,6 +129,19 @@ pub enum Operation {
     SetDefaultRule(SettlementRule),
 }
 
+/// Storage key layout for settlement_contract.
+///
+/// **Naming Convention (Issue #966):**
+/// All `DataKey` variants follow the UpperCamelCase singular noun convention
+/// without ad-hoc abbreviations (e.g., `Admin`, `Initializing`, `Governance`,
+/// `Merchant`, `Rule`, `ArchivedMerchant`, `DefaultRule`, `Payment`,
+/// `ScheduledOperation`, `Deployer`, `SchemaVersion`, `CachedGovRule`).
+///
+/// **Stability Notice:**
+/// In Soroban, contracttype enum variants are serialized into ledger keys using
+/// their exact identifier as an `SCVal::Symbol`. Changing existing variant
+/// names breaks binary compatibility with deployed ledger entries. All
+/// existing variant names MUST remain strictly unchanged.
 #[derive(Clone)]
 #[contracttype]
 pub(crate) enum DataKey {
