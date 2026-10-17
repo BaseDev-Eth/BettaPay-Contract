@@ -4,7 +4,8 @@ use bettapay_common::{constants::BPS_DENOMINATOR, events};
 
 use crate::errors::SettlementError;
 use crate::policy::{
-    BOOTSTRAP_DEFAULT_RULE, MAX_PAYMENTS_BATCH, PAYMENT_TTL_BUMP, PAYMENT_TTL_THRESHOLD,
+    BOOTSTRAP_DEFAULT_RULE, MAX_PAYMENTS_BATCH, MAX_PAYMENT_REFERENCE_LEN, PAYMENT_TTL_BUMP,
+    PAYMENT_TTL_THRESHOLD,
 };
 use crate::storage::{
     assert_not_paused, assert_payments_readable, is_merchant_registered_and_bump_ttl,
@@ -360,6 +361,8 @@ fn assert_read_authorized(env: &Env, merchant: &Address, signers: &Vec<Address>)
 impl SettlementContract {
     /// Store a payment reference for a merchant and calculate the fee split.
     ///
+    /// `reference` is fixed at [`MAX_PAYMENT_REFERENCE_LEN`] bytes (`BytesN<32>`).
+    ///
     /// # Panics
     ///
     /// * [`Paused`](SettlementError::Paused) — if the contract is paused.
@@ -388,7 +391,7 @@ impl SettlementContract {
         // Validate cheap, non-storage input first (issue #774): an all-zero
         // reference is always invalid, so reject it before any storage reads
         // (merchant lookup) or auth checks to avoid wasting gas on invalid input.
-        if reference == BytesN::from_array(&env, &[0; 32]) {
+        if reference == BytesN::from_array(&env, &[0; MAX_PAYMENT_REFERENCE_LEN as usize]) {
             panic_with_error!(&env, SettlementError::InvalidPaymentReference);
         }
         assert_not_paused(&env);
