@@ -163,7 +163,18 @@
 //! - `transfer_admin` — rotate compromised keys
 //! - `initiate_recovery` / `cancel_recovery` / `execute_recovery` — the
 //!   admin-recovery flow itself must keep working while paused
-//! - `schedule` / `execute` / `cancel` — scheduled operations must proceed
+//!
+//! The timelocked queue is the opposite: `schedule`, `execute` and `cancel`
+//! all call `assert_not_paused` and are **rejected with
+//! [`SettlementError::Paused`] while the contract is paused**. A queued
+//! operation is not lost by this: it stays in storage untouched and can be
+//! executed or cancelled once the contract is unpaused. The rationale is that
+//! the timelock is a deferred, planned path, whereas an incident is handled
+//! through the direct admin operations listed above (plus `unpause`), which
+//! stay available. Freezing the queue also stops a previously scheduled
+//! operation from firing in the middle of an incident; recovery additionally
+//! vetoes the queue (see `initiate_recovery`). Pinned by
+//! `paused_timelock_operations_are_rejected_and_queue_survives`.
 //!
 //! `pause`/`unpause` themselves are guarded to be idempotent, mirroring
 //! governance: pausing while already paused panics with `AlreadyPaused`, and
@@ -201,7 +212,7 @@
 //! | `transfer_admin` / `change_threshold` | fail-closed | Requires valid admin multisig authorization |
 //! | `pause` / `unpause` | fail-closed | Requires valid admin multisig authorization |
 //! | `upgrade` | fail-closed | Requires valid admin multisig authorization and interface check |
-//! | `schedule` / `execute` / `cancel` | fail-closed | Requires valid admin multisig authorization and timelock |
+//! | `schedule` / `execute` / `cancel` | fail-closed | Requires valid admin multisig authorization and timelock (`schedule`/`cancel`); also rejected with `Paused` while the contract is paused |
 //!
 //! ## Event Convention
 //!
