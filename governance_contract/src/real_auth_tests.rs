@@ -45,18 +45,7 @@ fn admin_transfer_and_threshold_change_require_real_authorization() {
         .try_transfer_admin(&admins, &soroban_sdk::vec![&env, replacement_admin], &1,)
         .is_err());
 
-    let env = Env::default();
-    env.mock_all_auths();
-    let a1 = Address::generate(&env);
-    let a2 = Address::generate(&env);
-    let a3 = Address::generate(&env);
-    let admins = soroban_sdk::vec![&env, a1, a2, a3];
-    let recovery = Address::generate(&env);
-    let _deployer = Address::generate(&env);
-    let contract_id = env.register_contract(None, GovernanceContract);
-    let client = GovernanceContractClient::new(&env, &contract_id);
-    let deployer = Address::generate(&env);
-    client.init(&deployer, &admins, &1, &recovery);
+    let (env, client, admins, _) = super::setup_with(3, 1);
     env.mock_auths(&[]);
 
     assert!(client.try_change_threshold(&admins, &2).is_err());

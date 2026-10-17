@@ -959,21 +959,37 @@ fn assert_not_paused(env: &Env) {
     }
 }
 
-/// Shared test setup used across the main test module and the anchor_*
+/// Shared test setup helper used across the main test module and the anchor_*
 /// sub-modules, so a change to `init`'s signature only needs updating here.
 #[cfg(test)]
-pub(crate) fn setup() -> (Env, GovernanceContractClient<'static>, Vec<Address>) {
+pub(crate) fn setup_with(
+    admin_count: u32,
+    threshold: u32,
+) -> (
+    Env,
+    GovernanceContractClient<'static>,
+    Vec<Address>,
+    Address,
+) {
     use soroban_sdk::testutils::Address as _;
     let env = Env::default();
     env.mock_all_auths();
 
-    let deployer = Address::generate(&env);
-    let admin = Address::generate(&env);
+    let mut admins = Vec::new(&env);
+    for _ in 0..admin_count {
+        admins.push_back(Address::generate(&env));
+    }
     let recovery_address = Address::generate(&env);
     let contract_id = env.register_contract(None, GovernanceContract);
     let client = GovernanceContractClient::new(&env, &contract_id);
-    let admins = soroban_sdk::vec![&env, admin];
-    client.init(&deployer, &admins, &1, &recovery_address);
+    let deployer = Address::generate(&env);
+    client.init(&deployer, &admins, &threshold, &recovery_address);
+    (env, client, admins, recovery_address)
+}
+
+#[cfg(test)]
+pub(crate) fn setup() -> (Env, GovernanceContractClient<'static>, Vec<Address>) {
+    let (env, client, admins, _) = setup_with(1, 1);
     (env, client, admins)
 }
 
@@ -1006,18 +1022,7 @@ mod tests {
         Vec<Address>,
         Address,
     ) {
-        let env = Env::default();
-        env.mock_all_auths();
-
-        let admin1 = Address::generate(&env);
-        let admin2 = Address::generate(&env);
-        let admins = vec![&env, admin1.clone(), admin2.clone()];
-        let recovery_address = Address::generate(&env);
-        let contract_id = env.register_contract(None, GovernanceContract);
-        let client = GovernanceContractClient::new(&env, &contract_id);
-        let deployer = Address::generate(&env);
-        client.init(&deployer, &admins, &2, &recovery_address);
-        (env, client, admins, recovery_address)
+        super::setup_with(2, 2)
     }
 
     #[allow(dead_code)]
