@@ -10,7 +10,7 @@
 //! - [`constants`] — protocol-wide numeric constants (basis-point denominators,
 //!   fee bounds, TTL helpers, recovery delay).
 //! - [`storage`] — common storage helpers (`is_paused`, `set_paused`,
-//!   `is_zero_address`) and the [`CommonDataKey`] enum, the single
+//!   `is_zero_address`) and the [`CommonDataKey`](storage::CommonDataKey) enum, the single
 //!   declaration of the key shapes (`Paused`, `RecoveryAddress`,
 //!   `PendingRecovery`, `Threshold`) every contract writes into its own,
 //!   separate instance storage — see [`storage`]'s doc comment for what

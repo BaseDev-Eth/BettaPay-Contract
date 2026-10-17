@@ -27,8 +27,12 @@ jobs:
           targets: wasm32-unknown-unknown
           components: rustfmt, clippy, rust-src
 
+      # Caches ~/.cargo registry, git checkouts and target/. The key includes
+      # the Cargo.lock hash; on a lockfile miss rust-cache restores the newest
+      # cache for this job as a partial warm start.
       - uses: Swatinem/rust-cache@v2
         with:
+          key: ${{ hashFiles('Cargo.lock') }}
           cache-on-failure: true
 
       - name: Check formatting
@@ -48,10 +52,56 @@ jobs:
       - name: Run script smoke tests
         run: make test_scripts
 
-      - name: Install Soroban CLI
-        run: cargo install --locked soroban-cli --version 21.5.0
+      - name: Install Soroban CLI (version pinned in Makefile)
+        run: make install_soroban
+
+      - name: Check Soroban CLI version
+        run: make check_soroban
+
       - name: Validate CODEOWNERS
         run: make check_codeowners
 
       - name: Make All
         run: make fmt check clippy test test_scripts check_codeowners
+
+  msrv:
+    name: MSRV
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read MSRV from rust-toolchain.toml
+        id: msrv
+        run: echo "version=$(make -s print_msrv)" >> "$GITHUB_OUTPUT"
+
+      - name: Install MSRV toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.msrv.outputs.version }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ hashFiles('Cargo.lock') }}
+          cache-on-failure: true
+
+      - name: Check and test under MSRV ${{ steps.msrv.outputs.version }}
+        run: make msrv
+
+  doc:
+    name: Docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.85.0"
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ hashFiles('Cargo.lock') }}
+          cache-on-failure: true
+
+      - name: Build docs with warnings as errors
+        run: make doc

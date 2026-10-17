@@ -398,7 +398,7 @@ fn governance_bypass_enabled(env: &Env, governance: &Address) -> bool {
 /// should budget ~10-20% overhead beyond the base settlement compute (fees,
 /// storage reads/writes) when governance is wired and active.
 ///
-/// See also: [`GovFeeConfig`][crate::GovFeeConfig].
+/// See also: [`GovFeeConfig`].
 pub(crate) fn read_governance_fee_rule(env: &Env) -> Option<SettlementRule> {
     let governance: Address = env.storage().instance().get(&DataKey::Governance)?;
 

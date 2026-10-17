@@ -39,6 +39,16 @@ BettaPay-Contract/
 
 Network: `Test SDF Network ; September 2015`
 
+## Toolchain Requirements
+
+- **Rust (MSRV): 1.85.0.** The minimum supported Rust version is the channel
+  pinned in `rust-toolchain.toml`. CI builds and tests the workspace on it in a
+  separate MSRV job; reproduce it locally with `make msrv`.
+- **soroban-cli: 21.5.0.** Pinned once as `SOROBAN_VERSION` in the `Makefile`.
+  Install it with `make install_soroban` and check it with `make check_soroban`.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md#toolchain-pins) for details.
+
 ## Quick Start
 
 ```bash
