@@ -725,3 +725,105 @@ fn bypass_gov_fees_does_not_skip_admin_write_validation() {
     };
     client.set_settlement_rule(&soroban_sdk::vec![&env, admin], &merchant, &rule);
 }
+
+// ---------------------------------------------------------------------------
+// Issue #973: Governance fee config with u32::MAX
+// ---------------------------------------------------------------------------
+
+/// A settlement rule that exceeds the governance fee ceiling must be rejected
+/// with `FeeExceedsGovernanceConfig` (#312) rather than trapping or overflowing,
+/// even when governance's configured ceilings are extreme.
+#[test]
+#[should_panic(expected = "Error(Contract, #312)")]
+fn settlement_rule_exceeding_governance_ceiling_is_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    use governance_contract::{FeeConfig, GovernanceContract, GovernanceContractClient};
+
+    let gov_id = env.register_contract(None, GovernanceContract);
+    let gov_client = GovernanceContractClient::new(&env, &gov_id);
+    let gov_admin = Address::generate(&env);
+    let recovery = Address::generate(&env);
+    let gov_deployer = Address::generate(&env);
+    gov_client.init(
+        &gov_deployer,
+        &soroban_sdk::vec![&env, gov_admin.clone()],
+        &1,
+        &recovery,
+    );
+
+    // Governance ceiling: 100 platform bps, 50 network bps.
+    gov_client.set_fee_config(
+        &soroban_sdk::vec![&env, gov_admin],
+        &FeeConfig {
+            platform_fee_bps: 100,
+            network_fee_bps: 50,
+        },
+    );
+
+    let admin = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    let contract_id = env.register_contract(None, SettlementContract);
+    let client = SettlementContractClient::new(&env, &contract_id);
+    let deployer = Address::generate(&env);
+    client.init(
+        &deployer,
+        &soroban_sdk::vec![&env, admin.clone()],
+        &1,
+        &gov_id,
+        &recovery,
+    );
+    client.register_merchant(&soroban_sdk::vec![&env, admin], &merchant);
+
+    // Rule exceeding the governance ceiling (200 > 100 platform).
+    let over_ceiling_rule = SettlementRule {
+        platform_fee_bps: 200,
+        network_fee_bps: 50,
+        settlement_delay_ledger: 0,
+        auto_settle: false,
+    };
+    client.set_settlement_rule(&soroban_sdk::vec![&env, admin], &merchant, &over_ceiling_rule);
+}
+
+/// When governance has no fee config set, the settlement read path falls back
+/// to [`BOOTSTRAP_DEFAULT_RULE`] (100 bps platform, 5 bps network) instead of
+/// surfacing `GovernanceCallFailed`.
+#[test]
+fn settlement_read_path_falls_back_to_bootstrap_default_rule() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let empty_gov = super::register_governance(&env);
+    let admin = Address::generate(&env);
+    let recovery = Address::generate(&env);
+    let merchant = Address::generate(&env);
+
+    let contract_id = env.register_contract(None, SettlementContract);
+    let client = SettlementContractClient::new(&env, &contract_id);
+    let deployer = Address::generate(&env);
+    client.init(
+        &deployer,
+        &soroban_sdk::vec![&env, admin.clone()],
+        &1,
+        &empty_gov,
+        &recovery,
+    );
+    client.register_merchant(&soroban_sdk::vec![&env, admin], &merchant);
+
+    let amount = 10_000i128;
+    let rule = crate::BOOTSTRAP_DEFAULT_RULE;
+    let denom = 10_000i128;
+    let expected_platform = (amount * rule.platform_fee_bps as i128 + denom - 1) / denom;
+    let expected_network = (amount * rule.network_fee_bps as i128 + denom - 1) / denom;
+    let expected_merchant = (amount - expected_platform - expected_network).max(0);
+
+    let split = client.calculate_fee_split(&merchant, &amount);
+    assert_eq!(split.gross_amount, amount);
+    assert_eq!(split.platform_fee_amount, expected_platform);
+    assert_eq!(split.network_fee_amount, expected_network);
+    assert_eq!(split.merchant_amount, expected_merchant);
+    assert_eq!(split.platform_fee_amount, 100);
+    assert_eq!(split.network_fee_amount, 5);
+    assert_eq!(split.merchant_amount, 9_895);
+}

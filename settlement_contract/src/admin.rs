@@ -20,8 +20,8 @@ use crate::types::{DataKey, Operation, ScheduledOp, SettlementRule};
 use crate::{
     SettlementContract, SettlementContractClient, BOOTSTRAP_DEFAULT_RULE, CURRENT_SCHEMA_VERSION,
     DEFAULT_TIMELOCK_DELAY_SECONDS, MAX_SETTLEMENT_DELAY_LEDGER, MERCHANT_TTL_BUMP,
-    MERCHANT_TTL_THRESHOLD, RULE_TTL_BUMP, RULE_TTL_THRESHOLD, SCHEDULED_OP_TTL_BUMP,
-    SCHEDULED_OP_TTL_THRESHOLD,
+    MERCHANT_TTL_THRESHOLD, MIN_TIMELOCK_DELAY_SECONDS, RULE_TTL_BUMP, RULE_TTL_THRESHOLD,
+    SCHEDULED_OP_TTL_BUMP, SCHEDULED_OP_TTL_THRESHOLD,
 };
 
 #[contractimpl]
@@ -437,22 +437,22 @@ impl SettlementContract {
     /// Schedules an administrative operation to be executed after a timelock.
     ///
     /// The entry is created with a 30-day TTL bump ([`SCHEDULED_OP_TTL_BUMP`]),
-    /// which comfortably covers the minimum 7-day timelock delay
-    /// ([`DEFAULT_TIMELOCK_DELAY_SECONDS`]), ensuring that the scheduled
+    /// which comfortably covers the minimum timelock delay
+    /// ([`MIN_TIMELOCK_DELAY_SECONDS`]), ensuring that the scheduled
     /// operation remains intact and executable when `execute_at` is reached.
     ///
     /// # Panics
     ///
     /// * [`Paused`](SettlementError::Paused) — if the contract is currently paused.
     /// * [`Unauthorized`](SettlementError::Unauthorized) — if signers lack admin authority.
-    /// * [`ExecutionNotReady`](SettlementError::ExecutionNotReady) — if `execute_in` is less than `DEFAULT_TIMELOCK_DELAY_SECONDS`.
+    /// * [`ExecutionNotReady`](SettlementError::ExecutionNotReady) — if `execute_in` is less than `MIN_TIMELOCK_DELAY_SECONDS`.
     /// * [`OperationAlreadyScheduled`](SettlementError::OperationAlreadyScheduled) — if the operation is already in the queue.
     pub fn schedule(env: Env, signers: Vec<Address>, operation: Operation, execute_in: u64) {
         verify_admin_auth(&env, &signers, read_threshold(&env));
         assert_not_paused(&env);
         let caller = signers.get(0).unwrap();
 
-        if execute_in < DEFAULT_TIMELOCK_DELAY_SECONDS {
+        if execute_in < MIN_TIMELOCK_DELAY_SECONDS {
             panic_with_error!(&env, SettlementError::ExecutionNotReady);
         }
 
