@@ -599,7 +599,8 @@ impl SettlementContract {
             panic_with_error!(env, SettlementError::BatchTooLarge);
         }
 
-        let mut payments = Vec::new(&env);
+        let capacity = refs.len().min(MAX_PAYMENTS_BATCH) as usize;
+        let mut records = alloc::vec::Vec::with_capacity(capacity);
         for reference in refs.iter() {
             let key = DataKey::Payment(merchant.clone(), reference);
             if let Some(payment) = env.storage().persistent().get::<_, PaymentRecord>(&key) {
@@ -612,10 +613,10 @@ impl SettlementContract {
                     PAYMENT_TTL_THRESHOLD,
                     PAYMENT_TTL_BUMP,
                 );
-                payments.push_back(payment);
+                records.push(payment);
             }
         }
-        payments
+        Vec::from_slice(&env, &records)
     }
 }
 

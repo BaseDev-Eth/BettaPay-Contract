@@ -54,6 +54,8 @@ pub const RECOVERY_ALREADY_PENDING: u32 = 15;
 pub const ALREADY_PAUSED: u32 = 17;
 /// `unpause` was called while the contract was already unpaused.
 pub const ALREADY_UNPAUSED: u32 = 16;
+/// The new admin set and threshold are identical to the current ones.
+pub const SAME_ADMIN: u32 = 18;
 
 /// Lowest code reserved for `governance_contract`-only errors.
 pub const GOVERNANCE_RANGE_START: u32 = 200;
@@ -80,6 +82,7 @@ pub const SHARED_CODES: &[(&str, u32)] = &[
     ("RecoveryAlreadyPending", RECOVERY_ALREADY_PENDING),
     ("AlreadyPaused", ALREADY_PAUSED),
     ("AlreadyUnpaused", ALREADY_UNPAUSED),
+    ("SameAdmin", SAME_ADMIN),
 ];
 
 /// Asserts that a contract's full `(name, code)` table is internally
@@ -108,3 +111,56 @@ pub fn assert_no_code_collisions(contract_codes: &[(&str, u32)], range_start: u3
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shared_codes_are_unique_and_within_range() {
+        for (i, &(name_a, code_a)) in SHARED_CODES.iter().enumerate() {
+            assert!(
+                (1..=99).contains(&code_a),
+                "shared error code `{name_a}` = {code_a} is outside 1..=99 range"
+            );
+            for &(name_b, code_b) in &SHARED_CODES[i + 1..] {
+                assert_ne!(
+                    code_a, code_b,
+                    "duplicate code {code_a} shared between `{name_a}` and `{name_b}`"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn assert_no_code_collisions_accepts_valid_tables() {
+        let valid_gov: &[(&str, u32)] = &[
+            ("AlreadyInitialized", 1),
+            ("SameAdmin", 18),
+            ("AnchorMissing", 200),
+        ];
+        assert_no_code_collisions(valid_gov, GOVERNANCE_RANGE_START);
+
+        let valid_settle: &[(&str, u32)] = &[
+            ("AlreadyInitialized", 1),
+            ("SameAdmin", 18),
+            ("MerchantExists", 300),
+        ];
+        assert_no_code_collisions(valid_settle, SETTLEMENT_RANGE_START);
+    }
+
+    #[test]
+    #[should_panic(expected = "reserved for shared concept `SameAdmin` but is also used here for `WrongName`")]
+    fn assert_no_code_collisions_detects_mismatched_name() {
+        let invalid: &[(&str, u32)] = &[("WrongName", 18)];
+        assert_no_code_collisions(invalid, GOVERNANCE_RANGE_START);
+    }
+
+    #[test]
+    #[should_panic(expected = "outside this contract's reserved range")]
+    fn assert_no_code_collisions_detects_out_of_range_code() {
+        let invalid: &[(&str, u32)] = &[("CustomCode", 150)];
+        assert_no_code_collisions(invalid, GOVERNANCE_RANGE_START);
+    }
+}
+

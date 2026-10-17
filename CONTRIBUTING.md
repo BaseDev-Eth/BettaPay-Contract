@@ -188,6 +188,18 @@ If `cargo` prompts to install the toolchain, accept — `rust-toolchain.toml` ha
 4. **Run local checks** before pushing (see [Testing](#testing) and [Pull Request Checklist](#pull-request-checklist)).
 5. **Open a pull request** against `main` with a clear description and test plan.
 
+## Error-Code Numbering Scheme
+
+Error codes across BettaPay contracts are canonically defined and registered in `bettapay_common::error_codes` to avoid numeric drift and cross-contract collisions (issue #963):
+
+- **`1..=99`**: Shared error concepts across contracts (e.g., `AlreadyInitialized`, `Unauthorized`, `SameAdmin`).
+- **`200..=299`**: Reserved exclusively for `governance_contract` errors (e.g., `AnchorMissing`, `InvalidParamValue`).
+- **`300..=399`**: Reserved exclusively for `settlement_contract` errors (e.g., `MerchantExists`, `PaymentOrphaned`).
+
+When introducing a new error:
+1. **Shared concepts**: Add the constant to `bettapay_common/src/error_codes.rs` in the `1..=99` range and include it in `SHARED_CODES`. Use the constant as the discriminant in each contract's error enum.
+2. **Contract-specific concepts**: Pick the next unused number in that contract's reserved range (`200..=299` for governance, `300..=399` for settlement).
+3. Validate by running `assert_no_code_collisions` to ensure no overlapping discriminants exist.
 ## Optional: Pre-Commit Hook
 
 Contributors can optionally configure a local pre-commit hook to catch formatting and lint errors before committing and pushing.

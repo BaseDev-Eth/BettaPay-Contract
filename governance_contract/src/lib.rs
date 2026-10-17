@@ -131,9 +131,9 @@
 //! | 14 | `InvalidThreshold` | The provided multisig threshold is invalid |
 //! | 15 | `AlreadyPaused` | `pause` called while the contract was already paused |
 //! | 16 | `AlreadyUnpaused` | `unpause` called while the contract was already unpaused |
+//! | 18 | `SameAdmin` | Transfer target is identical to the current admin set and threshold |
 //! | 200 | `AnchorMissing` | Tried to remove an unregistered anchor |
 //! | 201 | `InvalidParamValue` | Supplied system parameter value is invalid or out of bounds |
-//! | 204 | `SameAdmin` | Transfer target is identical to the current admin set and threshold |
 //!
 //! ## Event Conventions
 //!
@@ -237,6 +237,18 @@ const READ_INSTANCE_TTL_BUMP: u32 = 100_000;
 // The schema-version marker (issue #507) is instance storage and is written
 // at `init`, so the first real storage migration has a defined baseline to
 // distinguish "pre-marker" from "current" data.
+/// Storage key layout for governance_contract.
+///
+/// **Naming Convention (Issue #966):**
+/// All `DataKey` variants follow the UpperCamelCase singular noun convention
+/// without ad-hoc abbreviations (e.g., `Admin`, `SystemParam`, `FeeConfig`,
+/// `Anchor`, `SchemaVersion`, `Deployer`).
+///
+/// **Stability Notice:**
+/// In Soroban, contracttype enum variants are serialized into ledger keys using
+/// their exact identifier as an `SCVal::Symbol`. Changing existing variant
+/// names breaks binary compatibility with deployed ledger entries. All
+/// existing variant names MUST remain strictly unchanged.
 #[derive(Clone)]
 #[contracttype]
 enum DataKey {
@@ -313,7 +325,7 @@ pub enum GovernanceError {
     /// `unpause` was called while the contract was already unpaused.
     AlreadyUnpaused = 16,
     /// The new admin set and threshold are identical to the current ones.
-    SameAdmin = 204,
+    SameAdmin = 18,
 }
 
 const _: () = {
@@ -333,11 +345,11 @@ const _: () = {
     assert!(
         GovernanceError::RecoveryAlreadyPending as u32 == error_codes::RECOVERY_ALREADY_PENDING
     );
-    assert!(GovernanceError::AnchorMissing as u32 >= error_codes::GOVERNANCE_RANGE_START);
-    assert!(GovernanceError::InvalidParamValue as u32 >= error_codes::GOVERNANCE_RANGE_START);
     assert!(GovernanceError::AlreadyPaused as u32 == error_codes::ALREADY_PAUSED);
     assert!(GovernanceError::AlreadyUnpaused as u32 == error_codes::ALREADY_UNPAUSED);
-    assert!(GovernanceError::SameAdmin as u32 >= error_codes::GOVERNANCE_RANGE_START);
+    assert!(GovernanceError::SameAdmin as u32 == error_codes::SAME_ADMIN);
+    assert!(GovernanceError::AnchorMissing as u32 >= error_codes::GOVERNANCE_RANGE_START);
+    assert!(GovernanceError::InvalidParamValue as u32 >= error_codes::GOVERNANCE_RANGE_START);
 };
 
 #[contract]
@@ -436,7 +448,7 @@ impl GovernanceContract {
         env.events().publish(
             (
                 Symbol::new(&env, events::RECOVERY_ADDRESS_UPDATED_EVENT),
-                new_recovery.clone(),
+                new_recovery,
             ),
             admin,
         );
@@ -481,12 +493,11 @@ impl GovernanceContract {
         // BettaPay upgrade path publishes it at the same point: after auth
         // and interface validation, immediately before the code swap (issue
         // #473).
-        let event_wasm_hash = new_wasm_hash.clone();
         let caller = signers.get(0).unwrap();
         env.events().publish(
             (
                 Symbol::new(&env, events::CONTRACT_UPGRADED_EVENT),
-                event_wasm_hash,
+                new_wasm_hash.to_val(),
             ),
             caller,
         );
@@ -645,7 +656,7 @@ impl GovernanceContract {
 
     pub fn pause(env: Env, signers: Vec<Address>) {
         verify_admin_auth(&env, &signers, read_threshold(&env));
-        if Self::is_paused(env.clone()) {
+        if storage::is_paused(&env) {
             panic_with_error!(&env, GovernanceError::AlreadyPaused);
         }
         let admin = signers.get(0).unwrap();
@@ -654,7 +665,7 @@ impl GovernanceContract {
 
     pub fn unpause(env: Env, signers: Vec<Address>) {
         verify_admin_auth(&env, &signers, read_threshold(&env));
-        if !Self::is_paused(env.clone()) {
+        if !storage::is_paused(&env) {
             panic_with_error!(&env, GovernanceError::AlreadyUnpaused);
         }
         let admin = signers.get(0).unwrap();
@@ -783,7 +794,7 @@ impl GovernanceContract {
         }
         let key = DataKey::Anchor(asset.clone());
         let old_anchor: Option<Address> = env.storage().persistent().get(&key);
-        env.storage().persistent().set(&key, &anchor.clone());
+        env.storage().persistent().set(&key, &anchor);
         env.storage()
             .persistent()
             .extend_ttl(&key, ANCHOR_TTL_THRESHOLD, ANCHOR_TTL_BUMP);

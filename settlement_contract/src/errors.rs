@@ -90,7 +90,7 @@ pub enum SettlementError {
     /// empty admin list at write time — but `read_admin` surfaces this
     /// instead of an untyped panic if that invariant is ever violated.
     AdminSetEmpty = 317,
-    SameAdmin = 318,
+    SameAdmin = 18,
 }
 
 const _: () = {
@@ -118,6 +118,7 @@ const _: () = {
     );
     assert!(SettlementError::AlreadyPaused as u32 == error_codes::ALREADY_PAUSED);
     assert!(SettlementError::AlreadyUnpaused as u32 == error_codes::ALREADY_UNPAUSED);
+    assert!(SettlementError::SameAdmin as u32 == error_codes::SAME_ADMIN);
     assert!(SettlementError::MerchantExists as u32 >= error_codes::SETTLEMENT_RANGE_START);
     assert!(SettlementError::MerchantMissing as u32 >= error_codes::SETTLEMENT_RANGE_START);
     assert!(
@@ -138,5 +139,4 @@ const _: () = {
     assert!(SettlementError::PaymentOrphaned as u32 >= error_codes::SETTLEMENT_RANGE_START);
     assert!(SettlementError::OperationHashCollision as u32 >= error_codes::SETTLEMENT_RANGE_START);
     assert!(SettlementError::AdminSetEmpty as u32 >= error_codes::SETTLEMENT_RANGE_START);
-    assert!(SettlementError::SameAdmin as u32 >= error_codes::SETTLEMENT_RANGE_START);
 };

@@ -61,7 +61,7 @@ fn governance_codes() -> [(&'static str, u32); 17] {
     ]
 }
 
-fn settlement_codes() -> [(&'static str, u32); 28] {
+fn settlement_codes() -> [(&'static str, u32); 34] {
     [
         (
             "AlreadyInitialized",
@@ -107,6 +107,7 @@ fn settlement_codes() -> [(&'static str, u32); 28] {
         ),
         ("AlreadyPaused", SettlementError::AlreadyPaused as u32),
         ("AlreadyUnpaused", SettlementError::AlreadyUnpaused as u32),
+        ("SameAdmin", SettlementError::SameAdmin as u32),
         ("MerchantExists", SettlementError::MerchantExists as u32),
         ("MerchantMissing", SettlementError::MerchantMissing as u32),
         (
@@ -131,11 +132,22 @@ fn settlement_codes() -> [(&'static str, u32); 28] {
             SettlementError::InvalidGovernance as u32,
         ),
         ("AmountOverflow", SettlementError::AmountOverflow as u32),
+        (
+            "GovernanceCallFailed",
+            SettlementError::GovernanceCallFailed as u32,
+        ),
+        (
+            "FeeExceedsGovernanceConfig",
+            SettlementError::FeeExceedsGovernanceConfig as u32,
+        ),
+        ("AmountTooSmall", SettlementError::AmountTooSmall as u32),
+        ("BatchTooLarge", SettlementError::BatchTooLarge as u32),
         ("PaymentOrphaned", SettlementError::PaymentOrphaned as u32),
         (
             "OperationHashCollision",
             SettlementError::OperationHashCollision as u32,
         ),
+        ("AdminSetEmpty", SettlementError::AdminSetEmpty as u32),
     ]
 }
 
