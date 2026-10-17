@@ -43,8 +43,8 @@ jobs:
       - name: Run cargo-audit
         run: cargo audit
 
-      - name: Install Soroban CLI
-        run: cargo install --locked soroban-cli --version 21.5.0
+      - name: Install Soroban CLI (version pinned in Makefile)
+        run: make install_soroban
 
       - name: Run Contributor Gates
         run: make all

@@ -6,16 +6,16 @@ use bettapay_common::{
 };
 
 use crate::errors::SettlementError;
+use crate::policy::{
+    BOOTSTRAP_DEFAULT_RULE, MAX_SETTLEMENT_DELAY_LEDGER, RULE_TTL_BUMP, RULE_TTL_THRESHOLD,
+};
 use crate::storage::{
     assert_not_paused, is_merchant_registered_and_bump_ttl, read_fallback_rule,
     read_rule_or_default, read_rule_or_default_no_bump, read_threshold,
     validate_fee_against_governance, validate_nonzero_address, verify_admin_auth,
 };
 use crate::types::{DataKey, SettlementRule};
-use crate::{
-    SettlementContract, SettlementContractClient, BOOTSTRAP_DEFAULT_RULE,
-    MAX_SETTLEMENT_DELAY_LEDGER, RULE_TTL_BUMP, RULE_TTL_THRESHOLD,
-};
+use crate::{SettlementContract, SettlementContractClient};
 
 /// Field-level bounds shared by the rule setters: each fee within
 /// `[MIN_FEE_BPS, MAX_FEE_BPS]` (and never above `BPS_DENOMINATOR`), the fee
@@ -182,7 +182,7 @@ impl SettlementContract {
     ///
     /// Keep-alive getter for authenticated maintenance flows. Read-only
     /// consumers that must not affect storage lifetime should call
-    /// [`get_settlement_rule_no_bump`](Self::get_settlement_rule_no_bump)
+    /// [`get_settlement_rule_no_bump`](SettlementContract::get_settlement_rule_no_bump)
     /// instead (issue #763).
     pub fn get_settlement_rule(env: Env, merchant: Address) -> Option<SettlementRule> {
         let key = DataKey::Rule(merchant);
@@ -200,7 +200,7 @@ impl SettlementContract {
         }
     }
 
-    /// TTL-neutral variant of [`get_settlement_rule`](Self::get_settlement_rule)
+    /// TTL-neutral variant of [`get_settlement_rule`](SettlementContract::get_settlement_rule)
     /// (issue #763): returns exactly the same value without extending the
     /// persistent storage TTL, so querying a rule never forces a rent write.
     pub fn get_settlement_rule_no_bump(env: Env, merchant: Address) -> Option<SettlementRule> {
@@ -212,8 +212,8 @@ impl SettlementContract {
     /// resolution chain: merchant-specific rule → global default → governance
     /// fee config → bootstrap fallback.
     ///
-    /// Unlike [`get_settlement_rule`](Self::get_settlement_rule) (which returns
-    /// `None` when no merchant-specific rule is stored) and [`get_default_rule`](Self::get_default_rule) (which returns `None` when
+    /// Unlike [`get_settlement_rule`](SettlementContract::get_settlement_rule) (which returns
+    /// `None` when no merchant-specific rule is stored) and [`get_default_rule`](SettlementContract::get_default_rule) (which returns `None` when
     /// no global default is stored), this method always returns a rule — it
     /// follows the same resolution that the write and payment paths use
     /// internally.

@@ -2,6 +2,7 @@ use soroban_sdk::testutils::Address as _;
 use soroban_sdk::Address;
 
 // Import the contract and client
+use super::setup;
 use super::*;
 
 #[test]

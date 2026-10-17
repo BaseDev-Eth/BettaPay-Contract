@@ -1,12 +1,23 @@
 SOROBAN ?= soroban
+# Single source of truth for the soroban-cli version, used locally and in CI.
+SOROBAN_VERSION := 21.5.0
+# Minimum supported Rust version, read from rust-toolchain.toml.
+MSRV := $(shell sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml)
 
 .PHONY: build
 build:
 	@echo "Building all contracts..."
 	cargo build --target wasm32-unknown-unknown --release
 
+.PHONY: install_soroban check_soroban
+install_soroban:
+	cargo install --locked soroban-cli --version $(SOROBAN_VERSION)
+
+check_soroban:
+	@SOROBAN="$(SOROBAN)" SOROBAN_VERSION="$(SOROBAN_VERSION)" bash scripts/check_soroban_version.sh
+
 .PHONY: optimize
-optimize: build
+optimize: check_soroban build
 	@mkdir -p target/optimized
 	@for contract in $(shell find . -path "*/target/wasm32-unknown-unknown/release/*.wasm" -type f); do \
 		output=$$(basename $$contract .wasm)_opt.wasm; \
@@ -18,7 +29,7 @@ clean:
 	cargo clean
 	@rm -rf target/optimized
 
-.PHONY: fmt test check clippy check_snapshots test_scripts wasm_size check_codeowners all
+.PHONY: fmt test check clippy print_msrv msrv doc check_snapshots test_scripts wasm_size check_codeowners all
 
 fmt:
 	cargo fmt --all --check
@@ -32,6 +43,17 @@ check:
 
 clippy:
 	cargo clippy --workspace --lib --all-features
+
+print_msrv:
+	@echo $(MSRV)
+
+msrv:
+	cargo +$(MSRV) check --workspace
+	cargo +$(MSRV) test -p governance_contract -p bettapay_common
+
+doc:
+	RUSTDOCFLAGS="-D warnings -A rustdoc::private_intra_doc_links" \
+		cargo doc --workspace --no-deps --document-private-items
 
 check_snapshots:
 	bash scripts/check_test_snapshots.sh

@@ -21,6 +21,9 @@ jobs:
           components: clippy
       
       - uses: Swatinem/rust-cache@v2
-      
+        with:
+          key: ${{ hashFiles('Cargo.lock') }}
+          cache-on-failure: true
+
       - name: Run Clippy
         run: make clippy

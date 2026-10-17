@@ -8,6 +8,7 @@ Thank you for contributing to the BettaPay Soroban smart contracts. This guide c
 - [Workspace Configuration](#workspace-configuration)
 - [Getting Started](#getting-started)
 - [Development Workflow](#development-workflow)
+- [Optional: Pre-Commit Hook](#optional-pre-commit-hook)
 - [Upgrades and Storage Migrations](DEVELOPMENT.md)
 - [Testing](#testing)
 - [Building WASM Binaries](#building-wasm-binaries)
@@ -25,7 +26,7 @@ Install the following before working on this repository:
 |------|---------|-------|
 | [Rust](https://rustup.rs/) | Build and test contracts | Version pinned in `rust-toolchain.toml` (currently **1.85.0**) |
 | `wasm32-unknown-unknown` target | Compile Soroban WASM | Installed automatically via `rust-toolchain.toml` |
-| [Soroban CLI](https://developers.stellar.org/docs/tools/developer-tools/cli) | Deploy and simulate on testnet | Required only for `scripts/` workflows |
+| [Soroban CLI](https://developers.stellar.org/docs/tools/developer-tools/cli) | Deploy, simulate and optimize WASM | Pinned to **21.5.0** in the `Makefile` (see [Toolchain pins](#toolchain-pins)) |
 
 Clone the repository and enter the workspace root:
 
@@ -35,6 +36,38 @@ cd BettaPay-Contract
 ```
 
 Rustup reads `rust-toolchain.toml` on first `cargo` invocation and installs the correct toolchain and WASM target.
+
+### Toolchain pins
+
+**soroban-cli.** The `Makefile` holds the only copy of the pinned version:
+
+```make
+SOROBAN_VERSION := 21.5.0
+```
+
+CI installs the CLI through the same Makefile target, so local and CI versions
+always match. To install and verify it locally:
+
+```bash
+make install_soroban   # cargo install --locked soroban-cli --version 21.5.0
+make check_soroban     # fails if `soroban --version` differs from the pin
+```
+
+`make optimize` runs `check_soroban` first. On a mismatch it stops with a
+message naming both versions, for example
+`soroban-cli version mismatch: local 22.0.0, pinned 21.5.0.` To bump the
+version, change `SOROBAN_VERSION` and nothing else.
+
+**MSRV.** The minimum supported Rust version is **1.85.0**, the `channel` in
+`rust-toolchain.toml`. It is the oldest compiler the workspace is guaranteed to
+build and test on, and a dependency bump that needs a newer compiler must raise
+it explicitly. The `MSRV` CI job runs the same check you can run locally:
+
+```bash
+make msrv   # cargo +1.85.0 check --workspace, then the unit tests
+```
+
+When it fails, the cargo error names the crate that no longer compiles.
 
 ## Workspace Configuration
 
@@ -167,6 +200,40 @@ When introducing a new error:
 1. **Shared concepts**: Add the constant to `bettapay_common/src/error_codes.rs` in the `1..=99` range and include it in `SHARED_CODES`. Use the constant as the discriminant in each contract's error enum.
 2. **Contract-specific concepts**: Pick the next unused number in that contract's reserved range (`200..=299` for governance, `300..=399` for settlement).
 3. Validate by running `assert_no_code_collisions` to ensure no overlapping discriminants exist.
+## Optional: Pre-Commit Hook
+
+Contributors can optionally configure a local pre-commit hook to catch formatting and lint errors before committing and pushing.
+
+### Checks Performed
+
+The hook automatically runs:
+- `cargo fmt --all --check`
+- `make clippy` (or `cargo clippy --workspace --lib --all-features`)
+
+The hook is scoped to only run when staged changes include Rust source files (`.rs`), ensuring non-Rust commits (such as documentation or configuration updates) remain fast and unblocked.
+
+### Setup Instructions
+
+You can set up the hook using either native Git hooks or the `pre-commit` framework:
+
+**Option 1: Native Git hook (no extra dependencies)**
+```bash
+git config core.hooksPath .githooks
+chmod +x .githooks/pre-commit
+```
+
+**Option 2: Using `pre-commit`**
+If you have `pre-commit` installed:
+```bash
+pre-commit install
+```
+
+### Skipping the Hook
+
+The hook is strictly optional. If needed, you can bypass the hook using `--no-verify`:
+```bash
+git commit --no-verify -m "commit message"
+```
 
 ## Testing
 
@@ -216,6 +283,21 @@ This deterministically runs formatting, workspace compilation, Clippy with all
 targets and features, workspace tests, a test-snapshot drift check, script
 smoke tests, WASM optimization, and the deployed-artifact size check. Run the
 same command locally to avoid CI failures.
+
+### Documentation build
+
+The `Docs` CI job builds rustdoc for every crate and fails on any rustdoc
+warning, such as a broken intra-doc link. It is a separate check, so a doc
+failure never hides test results. Reproduce it locally with:
+
+```bash
+make doc
+# RUSTDOCFLAGS="-D warnings -A rustdoc::private_intra_doc_links" \
+#   cargo doc --workspace --no-deps --document-private-items
+```
+
+Private items are documented because the contract modules are private, and the
+module docs link to them on purpose.
 
 ### Security documentation checks
 

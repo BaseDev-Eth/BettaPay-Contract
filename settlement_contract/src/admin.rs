@@ -9,6 +9,12 @@ use bettapay_common::{
 };
 
 use crate::errors::SettlementError;
+use crate::policy::{
+    BOOTSTRAP_DEFAULT_RULE, CURRENT_SCHEMA_VERSION, DEFAULT_TIMELOCK_DELAY_SECONDS,
+    MAX_SETTLEMENT_DELAY_LEDGER, MERCHANT_TTL_BUMP, MERCHANT_TTL_THRESHOLD,
+    MIN_TIMELOCK_DELAY_SECONDS, RULE_TTL_BUMP, RULE_TTL_THRESHOLD, SCHEDULED_OP_TTL_BUMP,
+    SCHEDULED_OP_TTL_THRESHOLD, SUPPORTED_INTERFACE_VERSION,
+};
 use crate::storage::{
     assert_not_paused, is_merchant_registered_and_bump_ttl, is_merchant_registered_internal,
     read_admin, read_admins, read_fallback_rule, read_governance, read_optional_primary_admin,
@@ -17,17 +23,12 @@ use crate::storage::{
     validate_governance, validate_nonzero_address, verify_admin_auth, write_admins,
 };
 use crate::types::{DataKey, Operation, ScheduledOp, SettlementRule};
-use crate::{
-    SettlementContract, SettlementContractClient, BOOTSTRAP_DEFAULT_RULE, CURRENT_SCHEMA_VERSION,
-    DEFAULT_TIMELOCK_DELAY_SECONDS, MAX_SETTLEMENT_DELAY_LEDGER, MERCHANT_TTL_BUMP,
-    MERCHANT_TTL_THRESHOLD, MIN_TIMELOCK_DELAY_SECONDS, RULE_TTL_BUMP, RULE_TTL_THRESHOLD,
-    SCHEDULED_OP_TTL_BUMP, SCHEDULED_OP_TTL_THRESHOLD,
-};
+use crate::{SettlementContract, SettlementContractClient};
 
 #[contractimpl]
 impl SettlementContract {
     pub fn supports_interface(_env: Env, version: u32) -> bool {
-        version == crate::SUPPORTED_INTERFACE_VERSION
+        version == SUPPORTED_INTERFACE_VERSION
     }
 
     /// Returns the schema version of the deployed build (`CURRENT_SCHEMA_VERSION`).
@@ -257,7 +258,7 @@ impl SettlementContract {
         );
     }
 
-    /// Completes a pending admin recovery initiated by [`Self::initiate_recovery`].
+    /// Completes a pending admin recovery initiated by [`initiate_recovery`](SettlementContract::initiate_recovery).
     ///
     /// # Executor policy
     ///
@@ -265,7 +266,7 @@ impl SettlementContract {
     /// The recovery target was already validated by the recovery address during
     /// `initiate_recovery`, and the 7-day delay (`RECOVERY_DELAY_SECONDS`)
     /// provides a window for the current admin set to cancel via
-    /// [`Self::cancel_recovery`].  Once the delay has elapsed, anyone may call
+    /// [`cancel_recovery`](SettlementContract::cancel_recovery).  Once the delay has elapsed, anyone may call
     /// `execute_recovery` — the pending state is consumed atomically, so a
     /// second call will revert with [`SettlementError::RecoveryNotPending`].
     ///
@@ -510,8 +511,8 @@ impl SettlementContract {
     ///
     /// `execute` deliberately performs **no caller authentication** for any
     /// [`Operation`] variant handled below. Authorization is enforced at the
-    /// timelock boundary instead: [`schedule`](Self::schedule) (and
-    /// [`cancel`](Self::cancel)) require admin multisig auth via
+    /// timelock boundary instead: [`schedule`](SettlementContract::schedule) (and
+    /// [`cancel`](SettlementContract::cancel)) require admin multisig auth via
     /// `verify_admin_auth` against the stored threshold. Once an operation
     /// has been scheduled by the admins and its timelock delay has elapsed,
     /// execution is intentionally permissionless so any caller can trigger it
@@ -721,7 +722,7 @@ impl SettlementContract {
     ///
     /// # Merchant auth policy note (issue #809)
     ///
-    /// The direct registration path ([`register_merchant`](crate::merchant::SettlementContract::register_merchant))
+    /// The direct registration path ([`register_merchant`](crate::SettlementContract::register_merchant))
     /// requires `merchant.require_auth()` to ensure explicit merchant consent.
     /// In contrast, this timelocked execution path deliberately does not require
     /// merchant authorization because `execute` is permissionless once the
