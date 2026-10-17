@@ -4,7 +4,6 @@ use soroban_sdk::testutils::Address as _;
 use soroban_sdk::Address;
 
 use super::setup;
-use super::*;
 
 #[test]
 fn anchor_removal_clears_entry() {

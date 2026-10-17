@@ -3,7 +3,6 @@ use soroban_sdk::Address;
 
 // Import the contract and client
 use super::setup;
-use super::*;
 
 #[test]
 #[should_panic(expected = "Error(Contract, #3)")]

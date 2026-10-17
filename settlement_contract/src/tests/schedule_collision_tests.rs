@@ -207,7 +207,10 @@ fn duplicate_and_hash_collision_are_distinct_errors() {
 
     let duplicate = client.try_schedule(&admins, &duplicate_op, &DEFAULT_TIMELOCK_DELAY_SECONDS);
     assert!(
-        matches!(duplicate, Err(Ok(SettlementError::OperationAlreadyScheduled))),
+        matches!(
+            duplicate,
+            Err(Ok(e)) if e == soroban_sdk::Error::from_contract_error(SettlementError::OperationAlreadyScheduled as u32)
+        ),
         "identical re-schedule must return OperationAlreadyScheduled",
     );
 
@@ -225,7 +228,10 @@ fn duplicate_and_hash_collision_are_distinct_errors() {
 
     let collision = client.try_schedule(&admins, &colliding_op, &DEFAULT_TIMELOCK_DELAY_SECONDS);
     assert!(
-        matches!(collision, Err(Ok(SettlementError::OperationHashCollision))),
+        matches!(
+            collision,
+            Err(Ok(e)) if e == soroban_sdk::Error::from_contract_error(SettlementError::OperationHashCollision as u32)
+        ),
         "same-hash different-payload schedule must return OperationHashCollision",
     );
 

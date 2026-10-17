@@ -208,7 +208,7 @@ Contributors can optionally configure a local pre-commit hook to catch formattin
 
 The hook automatically runs:
 - `cargo fmt --all --check`
-- `make clippy` (or `cargo clippy --workspace --lib --all-features`)
+- `make clippy` (or `cargo clippy --workspace --all-targets --all-features -- -D warnings`)
 
 The hook is scoped to only run when staged changes include Rust source files (`.rs`), ensuring non-Rust commits (such as documentation or configuration updates) remain fast and unblocked.
 
@@ -246,6 +246,12 @@ Contract logic is tested with Soroban's in-memory `Env` in each crate's `#[cfg(t
 ```bash
 cargo build --target wasm32-unknown-unknown --release
 cargo test --workspace
+```
+
+Or invoke the Makefile test target, which runs all workspace tests across `settlement_contract`, `governance_contract`, and `bettapay_common` in both debug and release modes:
+
+```bash
+make test
 ```
 
 ### Run tests for a single contract

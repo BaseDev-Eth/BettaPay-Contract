@@ -48,28 +48,51 @@ What is on the ledger today, and which storage kind holds it.
 
 | Key | Storage | Holds |
 | --- | --- | --- |
-| `Admin` | instance | `Address` |
-| `RecoveryAddress` | instance | `Address` |
-| `PendingRecovery` | instance | `PendingRecovery` |
+| `Admin` | instance | `Vec<Address>` |
+| `Initializing` | instance | sentinel set during `init` to prevent reentrancy, removed once complete |
 | `Governance` | instance | `Address` |
-| `Paused` | instance | `bool` |
-| `DefaultRule` | persistent | `SettlementRule` |
-| `Merchant(Address)` | persistent | merchant registration |
-| `Rule(Address)` | persistent | `SettlementRule` |
-| `Payment(Address, BytesN<32>)` | persistent | `PaymentRecord` |
+| `Deployer` | instance | `Address` (gates `init` front-running prevention, issue #684) |
+| `SchemaVersion` | instance | `u32` (schema version written at `init`, issue #507, #704) |
+| `CachedGovRule` | instance | `Option<SettlementRule>` (cached governance fee rule, issue #744) |
+| `DefaultRule` | instance | `SettlementRule` (global default settlement rule) |
+| `Merchant(Address)` | persistent | `bool` (merchant registration status) |
+| `Rule(Address)` | persistent | `SettlementRule` (merchant-specific settlement rule) |
+| `ArchivedMerchant(Address)` | persistent | `bool` (tombstone written when merchant unregisters, issue #490) |
+| `Payment(Address, BytesN<32>)` | persistent | `PaymentRecord` (scoped by merchant and reference, issue #493) |
+| `ScheduledOperation(BytesN<32>)` | persistent | `ScheduledOp` (timelocked operation payload and execute_at) |
+
+#### Shared Keys (`CommonDataKey`)
+The following instance keys are shared across contracts via `bettapay_common::storage::CommonDataKey`:
+
+| Key | Storage | Holds |
+| --- | --- | --- |
+| `RecoveryAddress` | instance (`CommonDataKey`) | `Address` (authorised recovery address) |
+| `PendingRecovery` | instance (`CommonDataKey`) | `PendingRecovery` (in-flight recovery record) |
+| `Paused` | instance (`CommonDataKey`) | `bool` (pause flag) |
+| `Threshold` | instance (`CommonDataKey`) | `u32` (multisig admin threshold) |
+
+Note that `RecoveryAddress`, `PendingRecovery`, `Paused`, and `Threshold` are shared through `CommonDataKey` (from `bettapay_common::storage`), while `Admin` remains local (`Vec<Address>`) under each contract's own `DataKey`.
 
 ### Governance contract
 
 | Key | Storage | Holds |
 | --- | --- | --- |
-| `Admin` | instance | `Address` |
-| `RecoveryAddress` | instance | `Address` |
-| `PendingRecovery` | instance | `PendingRecovery` |
-| `Paused` | instance | `bool` |
+| `Admin` | instance | `Vec<Address>` |
+| `FeeConfig` | instance | `FeeConfig` (protocol fee ceilings) |
 | `SchemaVersion` | instance | `u32` (written at `init`, issue #507) |
-| `FeeConfig` | persistent | fee configuration |
-| `Anchor(Address)` | persistent | anchor address per asset |
-| `SystemParam(Symbol)` | persistent | numeric system parameter |
+| `Deployer` | instance | `Address` (gates `init` front-running prevention, issue #684) |
+| `Anchor(Address)` | persistent | `Address` (anchor address per asset) |
+| `SystemParam(Symbol)` | persistent | `i128` (numeric system parameter) |
+
+#### Shared Keys (`CommonDataKey`)
+The following instance keys are shared across contracts via `bettapay_common::storage::CommonDataKey`:
+
+| Key | Storage | Holds |
+| --- | --- | --- |
+| `RecoveryAddress` | instance (`CommonDataKey`) | `Address` (authorised recovery address) |
+| `PendingRecovery` | instance (`CommonDataKey`) | `PendingRecovery` (in-flight recovery record) |
+| `Paused` | instance (`CommonDataKey`) | `bool` (pause flag) |
+| `Threshold` | instance (`CommonDataKey`) | `u32` (multisig admin threshold) |
 
 The split matters for migrations:
 
