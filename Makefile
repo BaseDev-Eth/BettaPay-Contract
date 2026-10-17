@@ -44,7 +44,7 @@ export_events:
 list_pending_ops:
 	@bash scripts/list_pending_ops.sh $(ARGS)
 
-.PHONY: fmt test check clippy print_msrv msrv doc check_snapshots test_scripts wasm_size check_codeowners all
+.PHONY: fmt test check clippy print_msrv msrv doc check_docs check_snapshots test_scripts wasm_size check_codeowners all
 
 fmt:
 	cargo fmt --all --check
@@ -70,6 +70,9 @@ doc:
 	RUSTDOCFLAGS="-D warnings -A rustdoc::private_intra_doc_links" \
 		cargo doc --workspace --no-deps --document-private-items
 
+check_docs:
+	bash scripts/check_documented_constants.sh
+
 check_snapshots:
 	bash scripts/check_test_snapshots.sh
 
@@ -83,4 +86,4 @@ wasm_size: optimize
 check_codeowners:
 	bash scripts/check_codeowners.sh
 
-all: fmt check clippy test check_snapshots test_scripts check_codeowners check_interface_parity
+all: fmt check clippy test check_docs check_snapshots test_scripts check_codeowners check_interface_parity

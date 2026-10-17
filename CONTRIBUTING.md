@@ -11,6 +11,10 @@ Thank you for contributing to the BettaPay Soroban smart contracts. This guide c
 - [Optional: Pre-Commit Hook](#optional-pre-commit-hook)
 - [Upgrades and Storage Migrations](DEVELOPMENT.md)
 - [Testing](#testing)
+- [Contract limits and storage semantics](docs/contract-limits.md)
+- [Archive and tombstone semantics](docs/archive-and-tombstones.md)
+- [Test snapshot workflow](docs/test-snapshots.md)
+- [Wasm size budget](docs/wasm-size.md)
 - [Building WASM Binaries](#building-wasm-binaries)
 - [Optional: Soroban CLI Scripts](#optional-soroban-cli-scripts)
 - [Code Ownership and Review Process](#code-ownership-and-review-process)
@@ -262,6 +266,9 @@ cargo test -p settlement_contract merchant_lifecycle_uses_canonical_topics
 ```
 
 ### Test snapshots
+
+The full snapshot workflow, including intentional-drift review and CI behavior,
+is documented in [docs/test-snapshots.md](docs/test-snapshots.md).
 
 Soroban's `Env` test harness writes a JSON snapshot for every `#[test]` under each crate's `test_snapshots/` directory. The path always mirrors the test's Rust module path — keep that in mind when adding or moving test files:
 
