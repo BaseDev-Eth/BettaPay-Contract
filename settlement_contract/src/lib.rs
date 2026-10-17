@@ -269,7 +269,8 @@ pub use errors::SettlementError;
 pub(crate) use policy::*;
 pub use policy::{FALLBACK_SETTLEMENT_DELAY_LEDGER, MAX_PAYMENTS_BATCH, MAX_PAYMENTS_PER_MERCHANT};
 pub use types::{
-    Bps, FeeSplit, GovFeeConfig, Operation, PaymentRecord, ScheduledOp, SettlementRule,
+    Bps, FeeSplit, GovFeeConfig, Operation, PaymentRecord, PaymentsPage, ScheduledOp,
+    SettlementRule,
 };
 
 #[contract]
