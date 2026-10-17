@@ -217,6 +217,7 @@
 //! | `transfer_admin` / `change_threshold` | fail-closed | Requires valid admin multisig authorization |
 //! | `pause` / `unpause` | fail-closed | Requires valid admin multisig authorization |
 //! | `upgrade` | fail-closed | Requires valid admin multisig authorization and interface check |
+//! | `schedule` | fail-closed GovernanceCallFailed | Probes governance `get_fee_config` before writing; an unreachable governance reverts with `SettlementError::GovernanceCallFailed` and writes nothing (issue #994) |
 //! | `schedule` / `execute` / `cancel` | fail-closed | Requires valid admin multisig authorization and timelock (`schedule`/`cancel`); also rejected with `Paused` while the contract is paused |
 //!
 //! ## Event Convention

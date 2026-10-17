@@ -16,11 +16,12 @@ use crate::policy::{
     SCHEDULED_OP_TTL_THRESHOLD, SUPPORTED_INTERFACE_VERSION,
 };
 use crate::storage::{
-    assert_not_paused, is_merchant_registered_and_bump_ttl, is_merchant_registered_internal,
-    read_admin, read_admins, read_fallback_rule, read_governance, read_optional_primary_admin,
-    read_pending_recovery, read_recovery_address, read_rule_or_default, read_schema_version,
-    read_threshold, validate_admins_and_threshold, validate_fee_against_governance,
-    validate_governance, validate_nonzero_address, verify_admin_auth, write_admins,
+    assert_governance_reachable, assert_not_paused, is_merchant_registered_and_bump_ttl,
+    is_merchant_registered_internal, read_admin, read_admins, read_fallback_rule, read_governance,
+    read_optional_primary_admin, read_pending_recovery, read_recovery_address,
+    read_rule_or_default, read_schema_version, read_threshold, validate_admins_and_threshold,
+    validate_fee_against_governance, validate_governance, validate_nonzero_address,
+    verify_admin_auth, write_admins,
 };
 use crate::types::{DataKey, Operation, ScheduledOp, SettlementRule};
 use crate::{SettlementContract, SettlementContractClient};
@@ -483,6 +484,8 @@ impl SettlementContract {
     /// * [`Paused`](SettlementError::Paused) — if the contract is currently paused.
     /// * [`Unauthorized`](SettlementError::Unauthorized) — if signers lack admin authority.
     /// * [`ExecutionNotReady`](SettlementError::ExecutionNotReady) — if `execute_in` is less than `MIN_TIMELOCK_DELAY_SECONDS`.
+    /// * [`GovernanceCallFailed`](SettlementError::GovernanceCallFailed) — if the governance
+    ///   liveness probe (`get_fee_config`) fails (issue #994). Nothing is written.
     /// * [`OperationAlreadyScheduled`](SettlementError::OperationAlreadyScheduled) — if the operation is already in the queue.
     pub fn schedule(env: Env, signers: Vec<Address>, operation: Operation, execute_in: u64) {
         verify_admin_auth(&env, &signers, read_threshold(&env));
@@ -504,6 +507,11 @@ impl SettlementContract {
                 panic_with_error!(&env, SettlementError::InvalidSettlementDelay);
             }
         }
+
+        // Issue #994: probe governance before anything is written so an
+        // unreachable governance surfaces as `GovernanceCallFailed` now,
+        // rather than leaving operators with a stuck queue later.
+        assert_governance_reachable(&env);
 
         let operation_xdr = operation.clone().to_xdr(&env);
         let op_hash: BytesN<32> = env.crypto().sha256(&operation_xdr).into();
