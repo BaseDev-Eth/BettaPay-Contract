@@ -25,6 +25,41 @@ use crate::storage::{
 use crate::types::{DataKey, Operation, ScheduledOp, SettlementRule};
 use crate::{SettlementContract, SettlementContractClient};
 
+/// Migration hook keyed to `CURRENT_SCHEMA_VERSION` (issue #984).
+///
+/// Called by `migrate` once for every version bump, with `from_version` set to
+/// the stored version being left behind (so the step converts `from_version`
+/// records to `from_version + 1`). `migrate` writes the advanced
+/// `SchemaVersion` after each step, so a step only has to convert records.
+///
+/// A step must be idempotent. To ship a conversion, bump
+/// `CURRENT_SCHEMA_VERSION` and add the arm here, e.g.:
+///
+/// ```ignore
+/// if from_version == 1 {
+///     migrate_v1_to_v2(env);
+/// }
+/// ```
+///
+/// There is no stored-format difference to convert yet, so no step does any
+/// work and `migrate` only advances the marker.
+fn migrate_step(_env: &Env, from_version: u32) {
+    let _ = from_version;
+}
+
+/// Advances the stored `SchemaVersion` to `CURRENT_SCHEMA_VERSION`, running
+/// `migrate_step` for each version crossed. A no-op when already current.
+fn run_migrations(env: &Env) {
+    let mut version = read_schema_version(env);
+    while version < CURRENT_SCHEMA_VERSION {
+        migrate_step(env, version);
+        version += 1;
+        env.storage()
+            .instance()
+            .set(&DataKey::SchemaVersion, &version);
+    }
+}
+
 #[contractimpl]
 impl SettlementContract {
     pub fn supports_interface(_env: Env, version: u32) -> bool {
@@ -415,6 +450,11 @@ impl SettlementContract {
     /// `CURRENT_SCHEMA_VERSION`. It is admin-gated and idempotent: a
     /// contract already at `CURRENT_SCHEMA_VERSION` is a no-op.
     ///
+    /// Issue #984: a stored `SchemaVersion` below `CURRENT_SCHEMA_VERSION` is
+    /// advanced one version at a time through `migrate_step`, the hook where
+    /// real record conversions go. Run it as upgrade, then `migrate`, then
+    /// verify (see the Upgrade Process in the crate docs).
+    ///
     /// # Panics
     ///
     /// * [`Paused`](SettlementError::Paused) — if the contract is paused.
@@ -424,11 +464,7 @@ impl SettlementContract {
         assert_not_paused(&env);
         let admin = signers.get(0).unwrap();
 
-        if read_schema_version(&env) < CURRENT_SCHEMA_VERSION {
-            env.storage()
-                .instance()
-                .set(&DataKey::SchemaVersion, &CURRENT_SCHEMA_VERSION);
-        }
+        run_migrations(&env);
         env.events().publish(
             (Symbol::new(&env, events::MIGRATED_EVENT),),
             (admin, CURRENT_SCHEMA_VERSION),

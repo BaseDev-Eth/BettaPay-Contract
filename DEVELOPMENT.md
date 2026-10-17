@@ -126,7 +126,7 @@ contract of its own.
 
 ## The Migration Pattern
 
-*Note: The governance contract now ships a `SchemaVersion` marker (written at `init`) and an admin-gated, idempotent `migrate` entry point (issue #507). The settlement contract has not adopted the marker yet; this section remains the template for when it does.*
+*Note: Both contracts ship a `SchemaVersion` marker (written at `init`) and an admin-gated, idempotent `migrate` entry point (issues #507, #704). Since issue #984, `migrate` is rejected while paused and, when the stored version is below `CURRENT_SCHEMA_VERSION`, calls a `migrate_step(env, from_version)` hook once per version crossed and then advances the marker. At `CURRENT_SCHEMA_VERSION` it is a no-op. To ship a conversion, bump `CURRENT_SCHEMA_VERSION` and add its step to that hook in each affected contract. The order is always: upgrade the Wasm, call `migrate`, verify.*
 
 Ordering is the point: the code that can read both formats has to be deployed
 before anything is rewritten.

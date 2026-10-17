@@ -138,6 +138,11 @@
 //!    struct — the old type is what keeps those entries readable.
 //! 4. Order is: upgrade the Wasm, then call `migrate`, then verify the
 //!    post-upgrade state, then remove the migration code in a later upgrade.
+//!    `migrate` is admin-gated, rejected while paused, and idempotent: at
+//!    `CURRENT_SCHEMA_VERSION` it is a no-op, and below it, it runs the
+//!    `migrate_step` hook once per version crossed and advances the stored
+//!    `SchemaVersion`. A real conversion bumps `CURRENT_SCHEMA_VERSION` and adds
+//!    its step to that hook; `governance_contract` has the same hook.
 //! 5. `Payment(Address, BytesN<32>)`, `Merchant(Address)` and `Rule(Address)`
 //!    are keyed by value and Soroban cannot enumerate storage keys — which is
 //!    why [`SettlementContract::get_payments`] takes the merchant and the
