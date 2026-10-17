@@ -130,7 +130,7 @@ fn read_path_governance_trap_falls_back_to_bootstrap() {
     let split = client.calculate_fee_split(&merchant, &10_000);
     assert_eq!(split.platform_fee_amount, 100);
     assert_eq!(split.network_fee_amount, 5);
-    assert_eq!(split.merchant_amount, 9_895);
+    assert_eq!(split.merchant_payout_amount, 9_895);
 }
 
 /// Same as above but governance returns a *typed error* rather than trapping,
@@ -164,7 +164,7 @@ fn read_path_governance_typed_error_falls_back_to_bootstrap() {
     let split = client.calculate_fee_split(&merchant, &10_000);
     assert_eq!(split.platform_fee_amount, 100);
     assert_eq!(split.network_fee_amount, 5);
-    assert_eq!(split.merchant_amount, 9_895);
+    assert_eq!(split.merchant_payout_amount, 9_895);
 }
 
 /// When governance returns `None` (no config set), the read path should fall
@@ -195,7 +195,7 @@ fn read_path_governance_none_falls_through_to_bootstrap() {
     let split = client.calculate_fee_split(&merchant, &10_000);
     assert_eq!(split.platform_fee_amount, 100);
     assert_eq!(split.network_fee_amount, 5);
-    assert_eq!(split.merchant_amount, 9_895);
+    assert_eq!(split.merchant_payout_amount, 9_895);
 }
 
 // ---------------------------------------------------------------------------
@@ -470,7 +470,7 @@ fn read_path_governance_valid_config_used() {
     let split = client.calculate_fee_split(&merchant, &10_000);
     assert_eq!(split.platform_fee_amount, 250);
     assert_eq!(split.network_fee_amount, 50);
-    assert_eq!(split.merchant_amount, 9_700);
+    assert_eq!(split.merchant_payout_amount, 9_700);
 }
 
 /// Verifies that when governance has no config set (`Ok(Ok(None))`), the
@@ -518,7 +518,7 @@ fn read_path_governance_none_falls_back_to_bootstrap_defaults() {
     assert_eq!(split.gross_amount, amount);
     assert_eq!(split.platform_fee_amount, expected_platform);
     assert_eq!(split.network_fee_amount, expected_network);
-    assert_eq!(split.merchant_amount, expected_merchant);
+    assert_eq!(split.merchant_payout_amount, expected_merchant);
 
     // No BOOTSTRAP_FALLBACK_EVENT on the hot path (issue #691).
     let events = env.events().all();
@@ -537,7 +537,7 @@ fn read_path_governance_none_falls_back_to_bootstrap_defaults() {
     let split = client.calculate_fee_split(&merchant, &10_000);
     assert_eq!(split.platform_fee_amount, 100);
     assert_eq!(split.network_fee_amount, 5);
-    assert_eq!(split.merchant_amount, 9_895);
+    assert_eq!(split.merchant_payout_amount, 9_895);
 }
 
 // ---------------------------------------------------------------------------
@@ -632,7 +632,7 @@ fn bypass_gov_fees_one_uses_bootstrap_instead_of_governance_config() {
     let split = client.calculate_fee_split(&merchant, &10_000);
     assert_eq!(split.platform_fee_amount, 100);
     assert_eq!(split.network_fee_amount, 5);
-    assert_eq!(split.merchant_amount, 9_895);
+    assert_eq!(split.merchant_payout_amount, 9_895);
 }
 
 #[test]
@@ -644,7 +644,7 @@ fn bypass_gov_fees_zero_keeps_governance_config() {
     let split = client.calculate_fee_split(&merchant, &10_000);
     assert_eq!(split.platform_fee_amount, 250);
     assert_eq!(split.network_fee_amount, 50);
-    assert_eq!(split.merchant_amount, 9_700);
+    assert_eq!(split.merchant_payout_amount, 9_700);
 }
 
 #[test]
@@ -822,8 +822,8 @@ fn settlement_read_path_falls_back_to_bootstrap_default_rule() {
     assert_eq!(split.gross_amount, amount);
     assert_eq!(split.platform_fee_amount, expected_platform);
     assert_eq!(split.network_fee_amount, expected_network);
-    assert_eq!(split.merchant_amount, expected_merchant);
+    assert_eq!(split.merchant_payout_amount, expected_merchant);
     assert_eq!(split.platform_fee_amount, 100);
     assert_eq!(split.network_fee_amount, 5);
-    assert_eq!(split.merchant_amount, 9_895);
+    assert_eq!(split.merchant_payout_amount, 9_895);
 }

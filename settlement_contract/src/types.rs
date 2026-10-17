@@ -12,15 +12,15 @@ pub struct FeeSplit {
     /// The total gross amount of the payment.
     /// Mirrors the `amount` parameter passed to `store_payment_reference`.
     pub gross_amount: i128,
-    /// Portion of the settlement fee allocated to the platform.
+    /// Portion of the settlement fee allocated to the platform recipient.
     /// This amount is calculated by applying the platform fee basis points to the gross amount.
     pub platform_fee_amount: i128,
-    /// Portion of the settlement fee allocated to the network.
+    /// Portion of the settlement fee allocated to the network recipient.
     /// This amount is calculated by applying the network fee basis points to the gross amount.
     pub network_fee_amount: i128,
-    /// Net amount allocated to the merchant.
+    /// Net amount allocated to and received by the merchant.
     /// This derived output is calculated as the gross amount minus the rounded platform and network fee amounts.
-    pub merchant_amount: i128,
+    pub merchant_payout_amount: i128,
 }
 
 #[derive(Clone)]
@@ -41,9 +41,9 @@ pub struct PaymentRecord {
     /// The exact amount deducted for the network fee.
     /// Calculated and stored at payment creation to lock in the fee value.
     pub network_fee_amount: i128,
-    /// The net payout amount owed to the merchant.
+    /// The net payout amount owed to and received by the merchant.
     /// Calculated at payment creation to ensure deterministic settlement value.
-    pub merchant_amount: i128,
+    pub merchant_payout_amount: i128,
     /// The platform fee rate (in basis points) applied to this payment.
     /// Snapshot taken from the active settlement rule during creation.
     pub platform_fee_bps: u32,
@@ -59,6 +59,10 @@ pub struct PaymentRecord {
     /// Indicates if the payment should participate in automated settlement batches.
     /// Set from the active rule and used by external auto-settlement processes.
     pub auto_settle: bool,
+    /// Schema version of the PaymentRecord.
+    /// Written at storage time to support future migrations.
+    /// Records written before this field existed default to version 0 on read.
+    pub version: u32,
 }
 
 /// The fee configuration schema as returned by the governance contract.
