@@ -257,7 +257,7 @@ impl SettlementContract {
         );
     }
 
-    /// Completes a pending admin recovery initiated by [`Self::initiate_recovery`].
+    /// Completes a pending admin recovery initiated by [`initiate_recovery`](SettlementContract::initiate_recovery).
     ///
     /// # Executor policy
     ///
@@ -265,7 +265,7 @@ impl SettlementContract {
     /// The recovery target was already validated by the recovery address during
     /// `initiate_recovery`, and the 7-day delay (`RECOVERY_DELAY_SECONDS`)
     /// provides a window for the current admin set to cancel via
-    /// [`Self::cancel_recovery`].  Once the delay has elapsed, anyone may call
+    /// [`cancel_recovery`](SettlementContract::cancel_recovery).  Once the delay has elapsed, anyone may call
     /// `execute_recovery` — the pending state is consumed atomically, so a
     /// second call will revert with [`SettlementError::RecoveryNotPending`].
     ///
@@ -510,8 +510,8 @@ impl SettlementContract {
     ///
     /// `execute` deliberately performs **no caller authentication** for any
     /// [`Operation`] variant handled below. Authorization is enforced at the
-    /// timelock boundary instead: [`schedule`](Self::schedule) (and
-    /// [`cancel`](Self::cancel)) require admin multisig auth via
+    /// timelock boundary instead: [`schedule`](SettlementContract::schedule) (and
+    /// [`cancel`](SettlementContract::cancel)) require admin multisig auth via
     /// `verify_admin_auth` against the stored threshold. Once an operation
     /// has been scheduled by the admins and its timelock delay has elapsed,
     /// execution is intentionally permissionless so any caller can trigger it
@@ -721,7 +721,7 @@ impl SettlementContract {
     ///
     /// # Merchant auth policy note (issue #809)
     ///
-    /// The direct registration path ([`register_merchant`](crate::merchant::SettlementContract::register_merchant))
+    /// The direct registration path ([`register_merchant`](crate::SettlementContract::register_merchant))
     /// requires `merchant.require_auth()` to ensure explicit merchant consent.
     /// In contrast, this timelocked execution path deliberately does not require
     /// merchant authorization because `execute` is permissionless once the

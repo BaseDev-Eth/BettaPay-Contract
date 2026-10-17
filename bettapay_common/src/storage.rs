@@ -109,7 +109,7 @@ pub fn apply_unpause(env: &Env, admin: &Address) {
 ///
 /// Both `governance_contract` and `settlement_contract` store their admin
 /// role as a `Vec<Address>` (under their own contract-specific `DataKey`,
-/// not [`CommonDataKey::Admin`]) and treat index `0` as the "primary" admin
+/// not `CommonDataKey::Admin`) and treat index `0` as the "primary" admin
 /// for single-address contexts — the address recorded on events, and the
 /// caller compared against in `schedule`/`cancel` ownership checks. Each
 /// contract previously reimplemented `admins.get(0).unwrap()` for this; this

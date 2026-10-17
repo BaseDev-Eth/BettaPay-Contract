@@ -50,4 +50,19 @@ if ROOT_DIR="$TEST_ROOT" bash "$ROOT_DIR/scripts/check_wasm_size.sh" >/dev/null 
   fail "size gate accepted an oversized optimized artifact"
 fi
 
+# The soroban-cli version check must accept the pinned version and name both
+# versions on a mismatch.
+FAKE_SOROBAN="$TEST_ROOT/fake-soroban"
+printf '#!/usr/bin/env bash\necho "soroban 21.5.0 (abc123)"\n' >"$FAKE_SOROBAN"
+chmod +x "$FAKE_SOROBAN"
+SOROBAN="$FAKE_SOROBAN" SOROBAN_VERSION="21.5.0" \
+  bash "$ROOT_DIR/scripts/check_soroban_version.sh" >/dev/null ||
+  fail "version check rejected a matching soroban-cli"
+if MISMATCH_OUTPUT="$(SOROBAN="$FAKE_SOROBAN" SOROBAN_VERSION="99.0.0" \
+  bash "$ROOT_DIR/scripts/check_soroban_version.sh" 2>&1)"; then
+  fail "version check accepted a mismatched soroban-cli"
+fi
+[[ "$MISMATCH_OUTPUT" == *"local 21.5.0"*"pinned 99.0.0"* ]] ||
+  fail "version mismatch message does not name both versions"
+
 echo "tooling smoke tests passed"

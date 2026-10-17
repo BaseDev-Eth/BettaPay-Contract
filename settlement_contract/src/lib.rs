@@ -93,12 +93,12 @@
 //! indexers a predictable topic layout, every event in this contract follows
 //! the same conventions:
 //!
-//! - `topic[0]` is always the event name as a [`Symbol`], constructed via
-//!   [`Symbol::new`]. Indexers filter on this single topic to dispatch by
+//! - `topic[0]` is always the event name as a [`Symbol`](soroban_sdk::Symbol), constructed via
+//!   [`Symbol::new`](soroban_sdk::Symbol::new). Indexers filter on this single topic to dispatch by
 //!   event type.
 //! - `topic[1..n]` carry the entity identifiers that scope the event —
-//!   typically an [`Address`] (merchant, asset, admin), but for some events
-//!   also a [`BytesN<32>`] (new Wasm hash on `contract_upgraded`, payment
+//!   typically an [`Address`](soroban_sdk::Address) (merchant, asset, admin), but for some events
+//!   also a [`BytesN<32>`](soroban_sdk::BytesN) (new Wasm hash on `contract_upgraded`, payment
 //!   reference on `payment_stored`). The exact shape of `topic[1..n]` is
 //!   fixed per event.
 //! - The **data payload** carries the values describing the state change.
@@ -208,7 +208,7 @@
 //! This contract follows a consistent event emission pattern (see Issue #49):
 //!
 //! **Topics** carry the fixed event-name symbol and filterable entity
-//! identifiers. The first topic is always a [`Symbol`] naming the event type,
+//! identifiers. The first topic is always a [`Symbol`](soroban_sdk::Symbol) naming the event type,
 //! enabling indexers to filter by event kind. Subsequent topics hold the
 //! primary identifiers relevant to the event (e.g., merchant address, payment
 //! reference), so listeners can subscribe to events for a specific entity

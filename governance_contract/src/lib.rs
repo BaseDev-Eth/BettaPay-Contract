@@ -90,7 +90,7 @@
 //! ### Anchor Registry
 //! Each supported asset can nominate a trusted off-chain anchor address via
 //! [`GovernanceContract::upsert_anchor`]. The anchor address is stored keyed by
-//! the asset [`Address`][soroban_sdk::Address] in persistent storage.
+//! the asset [`Address`] in persistent storage.
 //! [`GovernanceContract::remove_anchor`] deletes the entry; attempting to
 //! remove an asset that has no registered anchor panics with
 //! [`GovernanceError::AnchorMissing`]. Both operations emit events
@@ -100,7 +100,7 @@
 //!
 //! ### System Parameters
 //! [`GovernanceContract::update_system_param`] stores an arbitrary `i128`
-//! value under a caller-supplied [`Symbol`][soroban_sdk::Symbol] key. This
+//! value under a caller-supplied [`Symbol`] key. This
 //! gives the admin a flexible mechanism to propagate numeric knobs (e.g.,
 //! maximum settlement delay, minimum collateral ratio) to other contracts
 //! without upgrading the governance contract itself. Parameters are read via
@@ -542,7 +542,7 @@ impl GovernanceContract {
         events::emit_recovery_cancelled(&env, &canceller);
     }
 
-    /// Completes a pending admin recovery initiated by [`Self::initiate_recovery`].
+    /// Completes a pending admin recovery initiated by [`initiate_recovery`](GovernanceContract::initiate_recovery).
     ///
     /// # Executor policy
     ///
@@ -550,7 +550,7 @@ impl GovernanceContract {
     /// The recovery target was already validated by the recovery address during
     /// `initiate_recovery`, and the 7-day delay (`RECOVERY_DELAY_SECONDS`)
     /// provides a window for the current admin set to cancel via
-    /// [`Self::cancel_recovery`].  Once the delay has elapsed, anyone may call
+    /// [`cancel_recovery`](GovernanceContract::cancel_recovery).  Once the delay has elapsed, anyone may call
     /// `execute_recovery` — the pending state is consumed atomically, so a
     /// second call will revert with [`GovernanceError::RecoveryNotPending`].
     ///
