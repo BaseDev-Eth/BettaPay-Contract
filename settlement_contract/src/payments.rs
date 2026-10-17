@@ -510,6 +510,54 @@ impl SettlementContract {
             .persistent()
             .remove(&DataKey::Payment(merchant, reference));
     }
+
+    /// Remove several of one merchant's payment references in a single call
+    /// after the configured admin threshold has authorized the operation.
+    ///
+    /// Issue #983: the bounded batch form of [`prune_payment`](Self::prune_payment).
+    /// References that are not stored (never existed, already pruned, or
+    /// repeated within `refs`) are skipped as no-ops, so a cleanup can be
+    /// retried safely. One `payments_pruned` event is emitted per call with
+    /// topics `(Symbol("payments_pruned"), merchant)` and data
+    /// `(admin, removed_count)`, where `removed_count` is the number of
+    /// records actually deleted. There are no accounting or refund side effects.
+    ///
+    /// # Panics
+    ///
+    /// * [`BatchTooLarge`](SettlementError::BatchTooLarge) — if `refs` exceeds
+    ///   [`MAX_PAYMENTS_BATCH`].
+    /// * Auth failure — if the signers do not satisfy the admin threshold.
+    pub fn prune_payments(
+        env: Env,
+        signers: Vec<Address>,
+        merchant: Address,
+        refs: Vec<BytesN<32>>,
+    ) -> u32 {
+        verify_admin_auth(&env, &signers, read_threshold(&env));
+        if refs.len() > MAX_PAYMENTS_BATCH {
+            panic_with_error!(&env, SettlementError::BatchTooLarge);
+        }
+
+        let mut removed: u32 = 0;
+        for reference in refs.iter() {
+            let key = DataKey::Payment(merchant.clone(), reference);
+            if env.storage().persistent().has(&key) {
+                env.storage().persistent().remove(&key);
+                removed += 1;
+            }
+        }
+
+        let admin = signers.get(0).unwrap();
+        env.events().publish(
+            (
+                Symbol::new(&env, events::PAYMENTS_PRUNED_EVENT),
+                merchant,
+            ),
+            (admin, removed),
+        );
+        removed
+    }
+
     /// Retrieve a payment record for a merchant by its reference, extending
     /// the storage TTL if found.
     ///
