@@ -243,6 +243,23 @@ batch calls above.
 `migrate` for fixed keys. They compose — one `migrate` call for the singletons,
 lazy conversion for the long tail.
 
+## PaymentRecord Schema Versioning
+
+As of issue #967, `PaymentRecord` includes a `version: u32` field written at
+storage time. New records are written with `version = 1`.
+
+**Old records:** Entries stored before this field existed have no `version` key
+and are detected by the field's absence during deserialization. Callers must
+treat missing `version` as `version = 0`. The field is encoded by name in the
+`#[contracttype]` map, so older contract versions will not decode the entry at
+all if the field is present (name-based encoding protects against silent
+corruption).
+
+**Future migrations:** The `version` field supports deterministic evolution
+without renaming the struct. When adding new fields, increment the version and
+pair it with a conversion function that maps old shapes to new ones,
+following the lazy-migration pattern shown in the next section.
+
 ## Worked Example: Adding a Field to `PaymentRecord`
 
 Say `PaymentRecord` (defined in `settlement_contract/src/types.rs`) gains `settled: bool`.
