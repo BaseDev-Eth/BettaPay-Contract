@@ -137,6 +137,10 @@ pub const BOOTSTRAP_FALLBACK_EVENT: &str = "bootstrap_fallback";
 /// `store_payment_reference`.
 pub const PAYMENT_STORED_EVENT: &str = "payment_stored";
 
+/// Topic emitted once per `prune_payments` call. Data is
+/// `(admin, removed_count)`.
+pub const PAYMENTS_PRUNED_EVENT: &str = "payments_pruned";
+
 /// Topic emitted when a timelocked administrative operation is scheduled.
 pub const OP_SCHEDULED_EVENT: &str = "op_scheduled";
 
