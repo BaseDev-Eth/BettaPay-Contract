@@ -6,12 +6,12 @@ use bettapay_common::{
 };
 
 use crate::errors::SettlementError;
-use crate::types::{DataKey, GovFeeConfig, SettlementRule};
-use crate::{
+use crate::policy::{
     BOOTSTRAP_DEFAULT_RULE, CURRENT_SCHEMA_VERSION, MAX_SETTLEMENT_DELAY_LEDGER, MERCHANT_TTL_BUMP,
     MERCHANT_TTL_THRESHOLD, READ_INSTANCE_TTL_BUMP, READ_INSTANCE_TTL_THRESHOLD, RULE_TTL_BUMP,
     RULE_TTL_THRESHOLD,
 };
+use crate::types::{DataKey, GovFeeConfig, SettlementRule};
 
 /// Governance system-parameter key for the fee circuit-breaker (issue #743).
 ///
