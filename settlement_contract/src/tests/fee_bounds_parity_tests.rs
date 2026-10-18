@@ -64,9 +64,13 @@ fn outcome<T, C: core::fmt::Debug, I: core::fmt::Debug>(
     match result {
         Ok(Ok(_)) => Ok(()),
         Ok(Err(e)) => panic!("unexpected conversion failure: {e:?}"),
-        Err(Ok(e)) => Err(e
-            .get_contract_error()
-            .expect("rejection must be a contract error")),
+        Err(Ok(e)) => {
+            if e.is_type(soroban_sdk::xdr::ScErrorType::Contract) {
+                Err(e.get_code())
+            } else {
+                panic!("rejection must be a contract error: {e:?}")
+            }
+        }
         Err(Err(e)) => panic!("unexpected invocation failure: {e:?}"),
     }
 }

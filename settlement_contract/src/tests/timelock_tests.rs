@@ -764,7 +764,7 @@ fn execute_unscheduled_operation_returns_operation_not_scheduled() {
 #[test]
 fn schedule_at_floor_succeeds() {
     let (env, client, admins, merchant) = setup();
-    let operation = Operation::RegisterMerchant(merchant);
+    let operation = Operation::RegisterMerchant(merchant.clone());
 
     client.schedule(&admins, &operation, &MIN_TIMELOCK_DELAY_SECONDS);
 
@@ -783,7 +783,7 @@ fn schedule_at_floor_succeeds() {
 #[test]
 fn schedule_below_floor_is_rejected() {
     let (_env, client, admins, merchant) = setup();
-    let operation = Operation::RegisterMerchant(merchant);
+    let operation = Operation::RegisterMerchant(merchant.clone());
 
     let result = client.try_schedule(&admins, &operation, &(MIN_TIMELOCK_DELAY_SECONDS - 1));
     assert_eq!(

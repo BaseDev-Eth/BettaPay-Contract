@@ -2,7 +2,6 @@ use soroban_sdk::testutils::{Address as _, Events};
 use soroban_sdk::{Address, FromVal, Symbol};
 
 use super::setup;
-use super::*;
 
 #[test]
 fn upsert_anchor_emits_anchor_upserted_event() {

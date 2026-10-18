@@ -649,7 +649,7 @@ mod governance_fee_config_shape_tests {
     fn raw_map(env: &Env, fields: &[(usize, u32)]) -> Val {
         let mut map: Map<Symbol, Val> = Map::new(env);
         for (index, value) in fields {
-            let _ = map.set(Symbol::new(env, FIELD_KEYS[*index]), (*value).into_val(env));
+            map.set(Symbol::new(env, FIELD_KEYS[*index]), (*value).into_val(env));
         }
         map.into_val(env)
     }
@@ -719,11 +719,11 @@ mod governance_fee_config_shape_tests {
         let env = Env::default();
         let mut map: Map<Symbol, Val> = Map::new(&env);
         // Numerically in range, but the wrong Soroban type (I128, not U32).
-        let _ = map.set(
+        map.set(
             Symbol::new(&env, "platform_fee_bps"),
             250i128.into_val(&env),
         );
-        let _ = map.set(Symbol::new(&env, "network_fee_bps"), 50u32.into_val(&env));
+        map.set(Symbol::new(&env, "network_fee_bps"), 50u32.into_val(&env));
         assert!(matches!(
             classify_governance_fee_config(&env, map.into_val(&env)),
             Err(SettlementError::GovernanceCallFailed)
@@ -734,11 +734,11 @@ mod governance_fee_config_shape_tests {
     fn value_wider_than_u32_is_rejected() {
         let env = Env::default();
         let mut map: Map<Symbol, Val> = Map::new(&env);
-        let _ = map.set(
+        map.set(
             Symbol::new(&env, "platform_fee_bps"),
             (u32::MAX as u64 + 1).into_val(&env),
         );
-        let _ = map.set(Symbol::new(&env, "network_fee_bps"), 50u32.into_val(&env));
+        map.set(Symbol::new(&env, "network_fee_bps"), 50u32.into_val(&env));
         assert!(matches!(
             classify_governance_fee_config(&env, map.into_val(&env)),
             Err(SettlementError::GovernanceCallFailed)

@@ -1515,7 +1515,7 @@ fn get_effective_rule_resolves_global_default_for_merchant_without_rule() {
 #[test]
 fn payments_survive_broken_governance_with_cached_config() {
     use crate::types::DataKey;
-    use governance_error_tests::panicking_gov::PanickingGovernance;
+    use super::governance_error_tests::panicking_gov::PanickingGovernance;
 
     let env = Env::default();
     env.mock_all_auths();
@@ -1661,7 +1661,7 @@ fn end_to_end_payment_lifecycle_asserts_event_order() {
         }
         let sym = Symbol::from_val(&env, &event_topics.get(0).unwrap());
         if sym == Symbol::new(&env, bettapay_common::events::PAYMENT_STORED_EVENT) {
-            let payload: PaymentRecord = PaymentRecord::try_from_val(&env, data).unwrap();
+            let payload: PaymentRecord = PaymentRecord::try_from_val(&env, &data).unwrap();
             assert_eq!(payload.amount, amount);
             assert_eq!(payload.merchant, merchant);
             assert_eq!(payload.platform_fee_amount, split.platform_fee_amount);
