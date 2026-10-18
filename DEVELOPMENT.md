@@ -73,6 +73,9 @@ The following instance keys are shared across contracts via `bettapay_common::st
 
 Note that `RecoveryAddress`, `PendingRecovery`, `Paused`, and `Threshold` are shared through `CommonDataKey` (from `bettapay_common::storage`), while `Admin` remains local (`Vec<Address>`) under each contract's own `DataKey`.
 
+The payment reference's fixed `BytesN<32>` length is named as
+`MAX_PAYMENT_REFERENCE_LEN` (32) rather than left as a bare literal.
+
 ### Governance contract
 
 | Key | Storage | Holds |
