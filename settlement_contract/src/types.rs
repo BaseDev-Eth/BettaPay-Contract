@@ -206,4 +206,10 @@ pub(crate) enum DataKey {
     /// Stores `Option<SettlementRule>` where `None` means no successful
     /// governance fetch has occurred yet.
     CachedGovRule,
+    /// Persistent — one per merchant, tracks the number of `Payment` records
+    /// currently stored for that merchant (issue #980). Incremented by
+    /// `store_payment_reference`, decremented by `prune_payment` /
+    /// `prune_payments`. Absence means zero, matching a registered merchant
+    /// that has never stored a payment.
+    PaymentCount(Address),
 }

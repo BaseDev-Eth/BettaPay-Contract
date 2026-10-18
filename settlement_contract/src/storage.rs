@@ -258,6 +258,44 @@ pub(crate) fn is_merchant_registered_and_bump_ttl(env: &Env, merchant: Address) 
     exists
 }
 
+/// Returns the number of `Payment` records currently stored for `merchant`
+/// (issue #980). A merchant with no counter entry — including a registered
+/// merchant that has never stored a payment — reads as zero.
+pub(crate) fn read_payment_count(env: &Env, merchant: &Address) -> u32 {
+    env.storage()
+        .persistent()
+        .get(&DataKey::PaymentCount(merchant.clone()))
+        .unwrap_or(0)
+}
+
+/// Increments `merchant`'s payment counter by one, called when
+/// `store_payment_reference` stores a new record. Keeps the counter entry
+/// warm on the same TTL policy as the merchant marker, since both live for
+/// as long as the merchant is active.
+pub(crate) fn increment_payment_count(env: &Env, merchant: &Address) {
+    let key = DataKey::PaymentCount(merchant.clone());
+    let count = read_payment_count(env, merchant);
+    env.storage().persistent().set(&key, &(count + 1));
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, MERCHANT_TTL_THRESHOLD, MERCHANT_TTL_BUMP);
+}
+
+/// Decrements `merchant`'s payment counter by `by`, called when
+/// `prune_payment` / `prune_payments` actually remove stored records. A `by`
+/// of zero is a no-op. The counter never underflows below zero.
+pub(crate) fn decrement_payment_count(env: &Env, merchant: &Address, by: u32) {
+    if by == 0 {
+        return;
+    }
+    let key = DataKey::PaymentCount(merchant.clone());
+    let count = read_payment_count(env, merchant);
+    env.storage().persistent().set(&key, &count.saturating_sub(by));
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, MERCHANT_TTL_THRESHOLD, MERCHANT_TTL_BUMP);
+}
+
 /// Resolves the effective settlement rule for a merchant by preferring the merchant-specific override,
 /// then falling back to the global default, then governance fee config, and finally using the bootstrap fallback.
 /// See `docs/bootstrap-fallback.md` for full semantics, trigger conditions, and emission rules.
