@@ -630,7 +630,7 @@ pub(crate) fn validate_fee_against_governance(env: &Env, rule: &SettlementRule) 
     {
         env.events().publish(
             (
-                Symbol::new(env, "fee_ceiling_rejected"),
+                Symbol::new(env, bettapay_common::events::FEE_CEILING_REJECTED_EVENT),
                 rule.platform_fee_bps,
             ),
             rule.network_fee_bps,

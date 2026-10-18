@@ -155,6 +155,52 @@ pub const OP_EXECUTED_EVENT: &str = "op_executed";
 /// Topic emitted when a scheduled administrative operation is cancelled.
 pub const OP_CANCELLED_EVENT: &str = "op_cancelled";
 
+/// Topic emitted when `validate_fee_against_governance` rejects a fee rule
+/// that exceeds governance's configured ceiling.
+pub const FEE_CEILING_REJECTED_EVENT: &str = "fee_ceiling_rejected";
+
+/// Every topic name defined in this registry, across all groups (shared,
+/// governance-only, settlement-only).
+///
+/// Issue #990: each contract's "event topic set is stable" test enumerates
+/// this list and asserts every topic it actually emits is a member of it —
+/// so a call site that regresses to an inline string literal (or a typo)
+/// fails that test instead of silently drifting out of the registry.
+pub const ALL_EVENT_TOPICS: &[&str] = &[
+    // Shared
+    ADMIN_TRANSFERRED_EVENT,
+    PAUSED_EVENT,
+    UNPAUSED_EVENT,
+    RECOVERY_INITIATED_EVENT,
+    RECOVERY_CANCELLED_EVENT,
+    RECOVERY_EXECUTED_EVENT,
+    CONTRACT_UPGRADED_EVENT,
+    THRESHOLD_CHANGED_EVENT,
+    RECOVERY_ADDRESS_UPDATED_EVENT,
+    // governance_contract only
+    INITIALIZED_EVENT,
+    MIGRATED_EVENT,
+    SYS_PARAM_UPDATED_EVENT,
+    FEE_CONFIG_UPDATED_EVENT,
+    ANCHOR_UPSERTED_EVENT,
+    ANCHOR_REMOVED_EVENT,
+    // settlement_contract only
+    GOVERNANCE_UPDATED_EVENT,
+    MERCHANT_REGISTERED_EVENT,
+    MERCHANT_CONSENT_EVENT,
+    MERCHANT_UNREGISTERED_EVENT,
+    SETTLEMENT_RULE_UPDATED_EVENT,
+    SETTLEMENT_RULE_CLEARED_EVENT,
+    DEFAULT_RULE_UPDATED_EVENT,
+    BOOTSTRAP_FALLBACK_EVENT,
+    PAYMENT_STORED_EVENT,
+    PAYMENTS_PRUNED_EVENT,
+    OP_SCHEDULED_EVENT,
+    OP_EXECUTED_EVENT,
+    OP_CANCELLED_EVENT,
+    FEE_CEILING_REJECTED_EVENT,
+];
+
 /// Emits the `admin_transferred` event with the structured
 /// [`AdminTransferred`] payload.
 ///
