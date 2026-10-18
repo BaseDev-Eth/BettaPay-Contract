@@ -32,21 +32,9 @@ use soroban_sdk::{Address, Env, FromVal, Symbol};
 // ---------------------------------------------------------------------------
 
 pub mod panicking_gov {
-    use crate::GovFeeConfig;
-    use soroban_sdk::{contract, contractimpl, Env};
-
-    /// A governance stub whose `get_fee_config` always traps (simulates a
-    /// broken or mis-deployed governance contract).
-    #[contract]
-    pub struct PanickingGovernance;
-
-    #[contractimpl]
-    impl PanickingGovernance {
-        #[allow(unused_variables)]
-        pub fn get_fee_config(env: Env) -> Option<GovFeeConfig> {
-            panic!("governance trap")
-        }
-    }
+    pub use super::super::mock_governance::{
+        register_governance_with_mode, MockGovMode, MockGovernance as PanickingGovernance,
+    };
 }
 
 use panicking_gov::PanickingGovernance;
@@ -101,7 +89,7 @@ fn read_path_governance_trap_falls_back_to_bootstrap() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let panicking_gov = env.register_contract(None, PanickingGovernance);
+    let panicking_gov = super::register_governance_with_mode(&env, super::MockGovMode::Trap);
     let empty_gov = super::register_governance(&env);
 
     let admin = Address::generate(&env);
@@ -212,7 +200,7 @@ fn write_path_governance_failure_surfaces_typed_error() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let panicking_gov = env.register_contract(None, PanickingGovernance);
+    let panicking_gov = super::register_governance_with_mode(&env, super::MockGovMode::Trap);
     let empty_gov = super::register_governance(&env);
 
     let admin = Address::generate(&env);
@@ -254,7 +242,7 @@ fn write_path_set_default_rule_governance_failure_surfaces_typed_error() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let panicking_gov = env.register_contract(None, PanickingGovernance);
+    let panicking_gov = super::register_governance_with_mode(&env, super::MockGovMode::Trap);
     let empty_gov = super::register_governance(&env);
 
     let admin = Address::generate(&env);
@@ -328,7 +316,7 @@ fn init_succeeds_with_panicking_governance() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let panicking_gov = env.register_contract(None, PanickingGovernance);
+    let panicking_gov = super::register_governance_with_mode(&env, super::MockGovMode::Trap);
     let admin = Address::generate(&env);
     let recovery = Address::generate(&env);
 
@@ -358,7 +346,7 @@ fn update_governance_succeeds_with_panicking_governance() {
     env.mock_all_auths();
 
     let empty_gov = super::register_governance(&env);
-    let panicking_gov = env.register_contract(None, PanickingGovernance);
+    let panicking_gov = super::register_governance_with_mode(&env, super::MockGovMode::Trap);
     let admin = Address::generate(&env);
     let recovery = Address::generate(&env);
 
@@ -865,7 +853,7 @@ fn schedule_rejects_unreachable_governance_without_writing_storage() {
     assert!(!env.as_contract(&contract_id, || env.storage().persistent().has(&key)));
 
     // Unreachable governance: typed error, nothing written.
-    let panicking_gov = env.register_contract(None, PanickingGovernance);
+    let panicking_gov = super::register_governance_with_mode(&env, super::MockGovMode::Trap);
     inject_governance(&env, &contract_id, &panicking_gov);
 
     assert_eq!(

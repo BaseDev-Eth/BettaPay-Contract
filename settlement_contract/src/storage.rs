@@ -179,7 +179,11 @@ pub(crate) fn validate_governance(env: &Env, governance: &Address) {
     validate_nonzero_address(env, governance, SettlementError::InvalidGovernance);
 }
 
-pub(crate) fn validate_nonzero_address(env: &Env, address: &Address, zero_error: SettlementError) {
+/// Rejects the zero address with a caller-supplied `SettlementError`.
+///
+/// Backed by [`bettapay_common::storage::is_zero_address`] as the single detection primitive.
+/// Reusable from both production entry points and `cfg(test)` modules.
+pub fn validate_nonzero_address(env: &Env, address: &Address, zero_error: SettlementError) {
     if storage::is_zero_address(env, address) {
         panic_with_error!(env, zero_error);
     }
@@ -463,6 +467,16 @@ pub(crate) fn assert_not_paused(env: &Env) {
     if storage::is_paused(env) {
         panic_with_error!(env, SettlementError::Paused);
     }
+}
+
+/// Enforces that the contract is not paused, then verifies admin multisig authorization.
+///
+/// Precedence: The pause check takes precedence over multisig authorization.
+/// A paused contract immediately panics with [`SettlementError::Paused`] before evaluating
+/// caller signers or returning [`SettlementError::Unauthorized`].
+pub fn assert_admin_and_not_paused(env: &Env, signers: &Vec<Address>) {
+    assert_not_paused(env);
+    verify_admin_auth(env, signers, read_threshold(env));
 }
 
 /// Invokes the governance contract's `get_fee_config` entry point and returns

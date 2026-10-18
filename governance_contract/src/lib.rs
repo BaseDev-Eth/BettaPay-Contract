@@ -701,7 +701,7 @@ impl GovernanceContract {
     }
 
     pub fn update_system_param(env: Env, signers: Vec<Address>, key: Symbol, value: i128) {
-        verify_admin_auth(&env, &signers, read_threshold(&env));
+        assert_admin_and_not_paused(&env, &signers);
 
         if value < 0 {
             panic_with_error!(&env, GovernanceError::InvalidParamValue);
@@ -756,8 +756,7 @@ impl GovernanceContract {
     /// `MIN_FEE_BPS - 1` and `MAX_FEE_BPS + 1` and accept the bounds themselves.
     ///
     pub fn set_fee_config(env: Env, signers: Vec<Address>, config: FeeConfig) {
-        assert_not_paused(&env);
-        verify_admin_auth(&env, &signers, read_threshold(&env));
+        assert_admin_and_not_paused(&env, &signers);
 
         if config.platform_fee_bps < MIN_FEE_BPS
             || config.platform_fee_bps > MAX_FEE_BPS
@@ -786,8 +785,7 @@ impl GovernanceContract {
     }
 
     pub fn upsert_anchor(env: Env, signers: Vec<Address>, asset: Address, anchor: Address) {
-        assert_not_paused(&env);
-        verify_admin_auth(&env, &signers, read_threshold(&env));
+        assert_admin_and_not_paused(&env, &signers);
         assert_not_zero(&env, &asset, GovernanceError::InvalidAdmin);
         assert_not_zero(&env, &anchor, GovernanceError::InvalidAdmin);
         if asset == anchor {
@@ -806,8 +804,7 @@ impl GovernanceContract {
     }
 
     pub fn remove_anchor(env: Env, signers: Vec<Address>, asset: Address) {
-        assert_not_paused(&env);
-        verify_admin_auth(&env, &signers, read_threshold(&env));
+        assert_admin_and_not_paused(&env, &signers);
         let key = DataKey::Anchor(asset.clone());
 
         if !env.storage().persistent().has(&key) {
@@ -985,6 +982,13 @@ fn read_optional_primary_admin(env: &Env) -> Address {
         })
 }
 
+/// Rejects the zero address with a caller-supplied `GovernanceError`.
+///
+/// Backed by [`bettapay_common::storage::is_zero_address`].
+/// In governance entry points (such as `upsert_anchor` and admin validation),
+/// zero addresses map to `GovernanceError::InvalidAdmin` because governance
+/// lacks a dedicated `ZeroAddress` error code and treats zero address arguments
+/// as invalid administrative parameters.
 fn assert_not_zero(env: &Env, address: &Address, error: GovernanceError) {
     if storage::is_zero_address(env, address) {
         panic_with_error!(env, error);
@@ -1004,6 +1008,16 @@ fn assert_not_paused(env: &Env) {
     if storage::is_paused(env) {
         panic_with_error!(env, GovernanceError::Paused);
     }
+}
+
+/// Enforces that the contract is not paused, then verifies admin multisig authorization.
+///
+/// Precedence: The pause check takes precedence over multisig authorization.
+/// A paused contract immediately panics with [`GovernanceError::Paused`] before evaluating
+/// caller signers or returning [`GovernanceError::Unauthorized`].
+fn assert_admin_and_not_paused(env: &Env, signers: &Vec<Address>) {
+    assert_not_paused(env);
+    verify_admin_auth(env, signers, read_threshold(env));
 }
 
 /// Shared test setup helper used across the main test module and the anchor_*

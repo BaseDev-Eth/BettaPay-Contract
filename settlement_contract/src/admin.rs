@@ -16,12 +16,12 @@ use crate::policy::{
     SCHEDULED_OP_TTL_THRESHOLD, SUPPORTED_INTERFACE_VERSION,
 };
 use crate::storage::{
-    assert_governance_reachable, assert_not_paused, is_merchant_registered_and_bump_ttl,
-    is_merchant_registered_internal, read_admin, read_admins, read_fallback_rule, read_governance,
-    read_optional_primary_admin, read_pending_recovery, read_recovery_address,
-    read_rule_or_default, read_schema_version, read_threshold, validate_admins_and_threshold,
-    validate_fee_against_governance, validate_governance, validate_nonzero_address,
-    verify_admin_auth, write_admins,
+    assert_admin_and_not_paused, assert_governance_reachable, assert_not_paused,
+    is_merchant_registered_and_bump_ttl, is_merchant_registered_internal, read_admin, read_admins,
+    read_fallback_rule, read_governance, read_optional_primary_admin, read_pending_recovery,
+    read_recovery_address, read_rule_or_default, read_schema_version, read_threshold,
+    validate_admins_and_threshold, validate_fee_against_governance, validate_governance,
+    validate_nonzero_address, verify_admin_auth, write_admins,
 };
 use crate::types::{DataKey, Operation, ScheduledOp, SettlementRule};
 use crate::{SettlementContract, SettlementContractClient};
@@ -210,8 +210,7 @@ impl SettlementContract {
     /// validation must be made inside `validate_governance` — never inlined in
     /// just one path, or the two paths will drift apart again.
     pub fn update_governance(env: Env, signers: Vec<Address>, new_governance: Address) {
-        assert_not_paused(&env);
-        verify_admin_auth(&env, &signers, read_threshold(&env));
+        assert_admin_and_not_paused(&env, &signers);
         validate_governance(&env, &new_governance);
         let admin = signers.get(0).unwrap();
         env.storage()
@@ -488,8 +487,7 @@ impl SettlementContract {
     ///   liveness probe (`get_fee_config`) fails (issue #994). Nothing is written.
     /// * [`OperationAlreadyScheduled`](SettlementError::OperationAlreadyScheduled) — if the operation is already in the queue.
     pub fn schedule(env: Env, signers: Vec<Address>, operation: Operation, execute_in: u64) {
-        verify_admin_auth(&env, &signers, read_threshold(&env));
-        assert_not_paused(&env);
+        assert_admin_and_not_paused(&env, &signers);
         let caller = signers.get(0).unwrap();
 
         if execute_in < MIN_TIMELOCK_DELAY_SECONDS {

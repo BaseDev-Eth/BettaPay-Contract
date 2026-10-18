@@ -10,8 +10,8 @@ use crate::policy::{
     BOOTSTRAP_DEFAULT_RULE, MAX_SETTLEMENT_DELAY_LEDGER, RULE_TTL_BUMP, RULE_TTL_THRESHOLD,
 };
 use crate::storage::{
-    assert_not_paused, is_merchant_registered_and_bump_ttl, read_fallback_rule,
-    read_rule_or_default, read_rule_or_default_no_bump, read_threshold,
+    assert_admin_and_not_paused, assert_not_paused, is_merchant_registered_and_bump_ttl,
+    read_fallback_rule, read_rule_or_default, read_rule_or_default_no_bump, read_threshold,
     validate_fee_against_governance, validate_nonzero_address, verify_admin_auth,
 };
 use crate::types::{DataKey, SettlementRule};
@@ -58,8 +58,7 @@ impl SettlementContract {
         merchant: Address,
         rule: SettlementRule,
     ) {
-        assert_not_paused(&env);
-        verify_admin_auth(&env, &signers, read_threshold(&env));
+        assert_admin_and_not_paused(&env, &signers);
         let admin = signers.get(0).unwrap();
 
         // Explicit ZeroAddress diagnostic instead of falling through to
@@ -99,8 +98,7 @@ impl SettlementContract {
     }
 
     pub fn clear_settlement_rule(env: Env, signers: Vec<Address>, merchant: Address) {
-        assert_not_paused(&env);
-        verify_admin_auth(&env, &signers, read_threshold(&env));
+        assert_admin_and_not_paused(&env, &signers);
         let admin = signers.get(0).unwrap();
 
         let key = DataKey::Rule(merchant.clone());
@@ -122,8 +120,7 @@ impl SettlementContract {
     }
 
     pub fn set_default_rule(env: Env, signers: Vec<Address>, new_rule: SettlementRule) {
-        assert_not_paused(&env);
-        verify_admin_auth(&env, &signers, read_threshold(&env));
+        assert_admin_and_not_paused(&env, &signers);
         let admin = signers.get(0).unwrap();
 
         if new_rule.platform_fee_bps > BPS_DENOMINATOR || new_rule.network_fee_bps > BPS_DENOMINATOR

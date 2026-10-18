@@ -1539,7 +1539,6 @@ fn get_effective_rule_resolves_global_default_for_merchant_without_rule() {
 #[test]
 fn payments_survive_broken_governance_with_cached_config() {
     use crate::types::DataKey;
-    use super::governance_error_tests::panicking_gov::PanickingGovernance;
 
     let env = Env::default();
     env.mock_all_auths();
@@ -1578,7 +1577,8 @@ fn payments_survive_broken_governance_with_cached_config() {
     assert_eq!(split.network_fee_amount, 50);
     assert_eq!(split.merchant_payout_amount, 9_700);
 
-    let panicking_gov = env.register_contract(None, PanickingGovernance);
+    let panicking_gov =
+        super::register_governance_with_mode(&env, super::MockGovMode::Trap);
     env.as_contract(&settle_id, || {
         env.storage()
             .instance()

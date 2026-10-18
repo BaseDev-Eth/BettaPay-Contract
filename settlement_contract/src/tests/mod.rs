@@ -12,33 +12,21 @@ pub mod fee_config_ordering_tests;
 pub mod governance_error_tests;
 pub mod integration_tests;
 pub mod interface_tests;
+pub mod mock_governance;
 pub mod recovery_admin_set_tests;
 pub mod reentrant_governance;
 pub mod schedule_collision_tests;
 pub mod timelock_tests;
 pub mod ttl_tests;
 
+pub use mock_governance::{
+    register_governance, register_governance_with_config, register_governance_with_mode,
+    MockGovMode, MockGovernance,
+};
+
 use crate::*;
 use soroban_sdk::testutils::Address as _;
-use soroban_sdk::{contract, contractimpl, Address, Env, Vec};
-
-/// A minimal governance stub that returns `None` from `get_fee_config`.
-/// This satisfies `validate_governance` in `init`, which requires the
-/// governance address to be a deployed contract exposing that function.
-#[contract]
-pub struct MockGovernance;
-
-#[contractimpl]
-impl MockGovernance {
-    pub fn get_fee_config(_env: Env) -> Option<GovFeeConfig> {
-        None
-    }
-}
-
-/// Registers a fresh `MockGovernance` contract and returns its address.
-pub fn register_governance(env: &Env) -> Address {
-    env.register_contract(None, MockGovernance)
-}
+use soroban_sdk::{Address, Env, Vec};
 
 /// Creates a fully initialised settlement contract environment.
 ///

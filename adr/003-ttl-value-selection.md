@@ -29,7 +29,11 @@ const MERCHANT_TTL_BUMP: u32 = 17280 * 30;           // ~30 days
 ### Admin & Governance: 50k / 100k ledgers
 ```rust
 // Used in read_admin, read_governance, read_recovery_address
-env.storage().instance().extend_ttl(50_000, 100_000);
+const READ_INSTANCE_TTL_THRESHOLD: u32 = 50_000;
+const READ_INSTANCE_TTL_BUMP: u32 = 100_000;
+env.storage()
+    .instance()
+    .extend_ttl(READ_INSTANCE_TTL_THRESHOLD, READ_INSTANCE_TTL_BUMP);
 ```
 
 The `17280` constant represents the approximate number of ledgers closed per day on Stellar (1 ledger every ~5 seconds).
