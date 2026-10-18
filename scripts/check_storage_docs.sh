@@ -103,6 +103,28 @@ if echo "$GOVERNANCE_DOC" | grep -E "\`FeeConfig\`[[:space:]]*\|[[:space:]]*pers
   MISSING=1
 fi
 
+OWNERSHIP_DOC="${ROOT_DIR}/docs/storage-key-ownership.md"
+if [ -f "$OWNERSHIP_DOC" ]; then
+  for key in "${SETTLEMENT_KEYS[@]}"; do
+    if ! grep -q "\`.*$key" "$OWNERSHIP_DOC"; then
+      log_error "docs/storage-key-ownership.md is missing DataKey variant: $key"
+      MISSING=1
+    fi
+  done
+  for key in "${GOVERNANCE_KEYS[@]}"; do
+    if ! grep -q "\`.*$key" "$OWNERSHIP_DOC"; then
+      log_error "docs/storage-key-ownership.md is missing DataKey variant: $key"
+      MISSING=1
+    fi
+  done
+  for key in "${COMMON_KEYS[@]}"; do
+    if ! grep -q "\`.*$key" "$OWNERSHIP_DOC"; then
+      log_error "docs/storage-key-ownership.md is missing CommonDataKey variant: $key"
+      MISSING=1
+    fi
+  done
+fi
+
 if [[ $MISSING -ne 0 ]]; then
   log_error "Storage layout documentation drift detected!"
   exit 1

@@ -23,6 +23,14 @@ BettaPay-Contract/
 ├── governance_contract/        # Fee config, anchor registry, system params
 │   ├── Cargo.toml
 │   └── src/lib.rs
+├── bettapay_common/            # Shared constants, types, error codes, and storage keys
+├── docs/                       # Core protocol architecture and lifecycle specifications
+│   ├── scheduled-operation-lifecycle.md # Timelocked queue, collision rules, and 9 operations
+│   ├── recovery-lifecycle.md   # Emergency recovery flow, delays, and failure modes
+│   ├── bootstrap-fallback.md   # 4-tier settlement rule fallback chain and emission rules
+│   ├── storage-key-ownership.md # Storage key matrix, ownership, and TTL policies
+│   ├── contract-limits.md      # Protocol constants and bounds reference
+│   └── archive-and-tombstones.md # Merchant archiving and tombstone semantics
 ├── scripts/
 │   ├── deploy_testnet.sh       # Build + deploy both contracts + init admin
 │   ├── simulate.sh             # Simulate contract calls locally
@@ -32,6 +40,14 @@ BettaPay-Contract/
 │   └── check_interface_parity.sh # Fail when the two contracts' interface versions drift
 └── DEVELOPMENT.md              # Upgrade and storage-migration guide
 ```
+
+## Core Documentation
+
+- **[Scheduled Operation Lifecycle](docs/scheduled-operation-lifecycle.md)**: State machine, allowed transitions, duplicate vs. genuine hash collision (codes `12` and `316`), minimum 7-day timelock delay, emergency recovery veto, permissionless execution, and reference for all nine `Operation` variants.
+- **[Admin Recovery Lifecycle](docs/recovery-lifecycle.md)**: End-to-end recovery sequence, actors, 7-day `RECOVERY_DELAY_SECONDS`, cancellation rules, failure modes (`RecoveryNotPending` `8`, `RecoveryDelayActive` `9`, `RecoveryAlreadyPending` `15`), and scheduled operation veto semantics.
+- **[Bootstrap Fallback Semantics](docs/bootstrap-fallback.md)**: The 4-tier resolution chain (merchant → default → governance → bootstrap), trigger conditions, field values (`100` platform bps, `5` network bps, `0` delay, `auto_settle` false), and event emission rules.
+- **[Storage Key Ownership and TTL Policies](docs/storage-key-ownership.md)**: Authoritative mapping of all settlement, governance, and `CommonDataKey` keys to owning crates, storage kinds, and TTL bump policies.
+- **[Contract Limits](docs/contract-limits.md)**: Numeric bounds, fee limits, batch limits, and their enforcement points.
 
 ## Deployed Addresses (Testnet)
 
@@ -477,23 +493,26 @@ pub struct PaymentRecord {
 | `get_admin` | None | `Address` | None | `NotInitialized` | Returns the current admin address. |
 | `get_governance` | None | `Address` | None | `NotInitialized` | Returns the configured governance contract address. |
 | `update_governance` | `new_governance: Address` | `()` | Stored Admin, not paused | `NotInitialized`, `Paused`, `InvalidGovernance` | Updates the governance contract address after validating `get_fee_config`. |
-| `initiate_recovery` | `new_admin: Address` | `()` | Recovery Address | `NotInitialized`, `InvalidAdmin` | Starts delayed admin recovery. |
-| `cancel_recovery` | None | `()` | Stored Admin | `NotInitialized`, `RecoveryNotPending` | Cancels a pending recovery during the delay. |
-| `execute_recovery` | None | `()` | None | `RecoveryNotPending`, `RecoveryDelayActive` | Applies pending recovery after the 7-day delay. |
-| `transfer_admin` | `new_admin: Address` | `()` | Stored Admin | `NotInitialized`, `InvalidAddress`, `InvalidAdmin` | Transfers the administrative control to a new address. `new_admin` cannot be zero or the current admin. |
+| `initiate_recovery` | `new_admin: Address` | `()` | Recovery Address | `NotInitialized`, `InvalidAdmin`, `RecoveryAlreadyPending` | Starts delayed admin recovery. Vetoes all pending scheduled operations. See [Recovery Lifecycle](docs/recovery-lifecycle.md). |
+| `cancel_recovery` | `signers: Vec<Address>` | `()` | Initiator or Admin Multisig | `NotInitialized`, `Unauthorized`, `RecoveryNotPending` | Cancels a pending recovery during the 7-day delay. See [Recovery Lifecycle](docs/recovery-lifecycle.md). |
+| `execute_recovery` | None | `()` | None (Permissionless) | `RecoveryNotPending`, `RecoveryDelayActive` | Applies pending recovery after 7-day delay elapses. Consumes pending state atomically. See [Recovery Lifecycle](docs/recovery-lifecycle.md). |
+| `transfer_admin` | `signers: Vec<Address>, new_admins: Vec<Address>, new_threshold: u32` | `()` | Stored Admin multisig | `NotInitialized`, `Unauthorized`, `InvalidAdmin`, `InvalidThreshold`, `SameAdmin` | Transfers administrative control and multisig threshold. |
 | `pause` | None | `()` | Stored Admin | `NotInitialized`, `Unauthorized` | Halts mutating operations (e.g. register merchant, store payment reference). |
 | `unpause` | None | `()` | Stored Admin | `NotInitialized`, `Unauthorized` | Resumes mutating contract operations. |
 | `is_paused` | None | `bool` | None | None | Returns whether the contract is currently paused. |
+| `schedule` | `signers: Vec<Address>, operation: Operation, execute_in: u64` | `()` | Stored Admin multisig threshold | `Paused`, `Unauthorized`, `ExecutionNotReady`, `GovernanceCallFailed`, `OperationAlreadyScheduled`, `OperationHashCollision` | Schedules a timelocked administrative operation. Enforces minimum 7-day delay (`MIN_TIMELOCK_DELAY_SECONDS`). See [Scheduled Operation Lifecycle](docs/scheduled-operation-lifecycle.md). |
+| `execute` | `executor: Address, operation: Operation` | `()` | None (Permissionless) | `Paused`, `OperationNotScheduled`, `ExecutionNotReady`, `RecoveryDelayActive` | Permissionlessly executes a scheduled operation after timelock delay. Vetoed if recovery is pending (except `CancelRecovery`). See [Scheduled Operation Lifecycle](docs/scheduled-operation-lifecycle.md). |
+| `cancel` | `signers: Vec<Address>, operation: Operation` | `()` | Stored Admin multisig threshold | `Paused`, `Unauthorized`, `OperationNotScheduled` | Cancels a scheduled operation prior to execution. See [Scheduled Operation Lifecycle](docs/scheduled-operation-lifecycle.md). |
 | `register_merchant`| `merchant: Address` | `()` | Stored Admin | `Paused`, `InvalidAddress`, `MerchantExists` | Registers a new merchant. The merchant must not already exist and cannot be the zero address. |
 | `unregister_merchant`| `merchant: Address`| `()` | Stored Admin | `Paused`, `MerchantMissing` | Removes a merchant from the registry, deletes their specific rule, and orphans their payment records — post-unregister reads of those records fail with `PaymentOrphaned`. |
 | `set_settlement_rule`| `merchant: Address`, `rule: SettlementRule` | `()` | Stored Admin | `Paused`, `MerchantMissing`, `InvalidFeeBps`, `InvalidSettlementDelay` | Sets merchant-specific override fees and delay parameters. Sum of bps must be $\le 10,000$. |
 | `clear_settlement_rule`| `merchant: Address`| `()` | Stored Admin | `MerchantRuleNotSet` | Deletes a merchant-specific rule override, forcing a fallback to default → governance → bootstrap. |
 | `set_default_rule` | `new_rule: SettlementRule` | `()` | Stored Admin | `InvalidFeeBps`, `InvalidSettlementDelay` | Configures the global fallback rule applied when no merchant-specific rule exists. |
 | `get_default_rule` | None | `Option<SettlementRule>` | None | None | Fetches the global default settlement rule configuration, if any. |
-| `store_payment_reference`| `merchant: Address`, `reference: BytesN<32>`, `amount: i128` | `FeeSplit` | `merchant` | `Paused`, `MerchantMissing`, `InvalidPaymentReference`, `InvalidAmount`, `DuplicatePaymentReference` | Records a payment hash on-chain and returns the fee split. `amount` must be $\ge 100$. |
+| `store_payment_reference`| `merchant: Address`, `reference: BytesN<32>`, `amount: i128` | `FeeSplit` | `merchant` | `Paused`, `MerchantMissing`, `InvalidPaymentReference`, `InvalidAmount`, `DuplicatePaymentReference` | Records a payment hash on-chain and returns the fee split. Emits `bootstrap_fallback` when falling back to unconfigured bootstrap defaults. See [Bootstrap Fallback Semantics](docs/bootstrap-fallback.md). |
 | `is_merchant_registered`| `merchant: Address` | `bool` | None | None | Checks if a merchant is present in the registry. |
 | `get_settlement_rule`| `merchant: Address` | `Option<SettlementRule>` | None | None | Reads the merchant-specific settlement rule override. |
-| `calculate_fee_split`| `merchant: Address`, `amount: i128` | `FeeSplit` | None | `MerchantMissing`, `InvalidAmount` | Performs a dry-run calculation of fees for the merchant without mutating storage. |
+| `calculate_fee_split`| `merchant: Address`, `amount: i128` | `FeeSplit` | None | `MerchantMissing`, `InvalidAmount` | Performs a dry-run calculation of fees for the merchant without mutating storage. Read-only and never emits events. See [Bootstrap Fallback Semantics](docs/bootstrap-fallback.md). |
 | `get_payment_reference`| `merchant: Address`, `reference: BytesN<32>` | `Option<PaymentRecord>` | None | None | Returns the merchant's logged payment record for the reference. Refreshes the entry's TTL when queried. |
 | `get_payments` | `merchant: Address`, `references: Vec<BytesN<32>>` | `Vec<PaymentRecord>` | None | None | Batch retrieves the merchant's logged payment records. Missing references are ignored. |
 | `prune_payments` | `merchant: Address`, `references: Vec<BytesN<32>>` | `u32` | Stored Admin | `BatchTooLarge` | Removes up to 100 of one merchant's payment records in one call. Missing or repeated references are skipped, so cleanup can be retried. Emits one `payments_pruned` event with the removed count. |
@@ -532,9 +551,9 @@ pub struct AdminTransferred {
 | `is_initialized` | None | `bool` | None | None | Returns `true` if initialization has been completed. |
 | `get_admin` | None | `Address` | None | `NotInitialized` | Returns the current admin address. |
 | `get_recovery_address` | None | `Address` | None | `NotInitialized` | Returns the configured backup recovery address. |
-| `initiate_recovery` | `new_admin: Address` | `()` | Recovery Address | `NotInitialized`, `InvalidAdmin` | Starts delayed admin recovery. |
-| `cancel_recovery` | None | `()` | Stored Admin | `NotInitialized`, `RecoveryNotPending` | Cancels a pending recovery during the delay. |
-| `execute_recovery` | None | `()` | None | `RecoveryNotPending`, `RecoveryDelayActive` | Applies pending recovery after the 7-day delay. |
+| `initiate_recovery` | `new_admin: Address` | `()` | Recovery Address | `NotInitialized`, `InvalidAdmin`, `RecoveryAlreadyPending` | Starts delayed admin recovery. See [Recovery Lifecycle](docs/recovery-lifecycle.md). |
+| `cancel_recovery` | None | `()` | Stored Admin | `NotInitialized`, `RecoveryNotPending` | Cancels a pending recovery during the 7-day delay. See [Recovery Lifecycle](docs/recovery-lifecycle.md). |
+| `execute_recovery` | None | `()` | None (Permissionless) | `RecoveryNotPending`, `RecoveryDelayActive` | Applies pending recovery after the 7-day delay. See [Recovery Lifecycle](docs/recovery-lifecycle.md). |
 | `upgrade` | `caller: Address`, `new_wasm_hash: BytesN<32>` | `()` | `caller == admin` | `Unauthorized` | Replaces the contract Wasm code with a new binary, leaving storage unchanged. Changing a stored type needs a migration — see [DEVELOPMENT.md](DEVELOPMENT.md). |
 | `transfer_admin` | `_caller: Address`, `new_admin: Address` | `()` | Stored Admin | `InvalidAdmin` | Assigns the admin role to `new_admin`. Address cannot be zero or the current admin. |
 | `pause` | `caller: Address` | `()` | `caller == admin` | `Unauthorized` | Halts mutating governance config operations. |

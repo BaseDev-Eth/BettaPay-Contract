@@ -22,11 +22,16 @@ We chose a **bootstrap fallback approach**:
   };
   ```
 - The `init()` function does **not** require or store a default rule.
-- When resolving the effective rule for a merchant, the contract checks, in order:
-  1. Merchant-specific rule → stored per-merchant via `set_settlement_rule`
-  2. Global default rule → stored globally via `set_default_rule`
-  3. Bootstrap fallback → hardcoded in contract code as `BOOTSTRAP_DEFAULT_RULE`
-- A `bootstrap_fallback` event is emitted whenever the bootstrap rule is used, so indexers can detect unconfigured deployments.
+- When resolving the effective rule for a merchant, the contract checks, in order (the 4-tier fallback chain):
+  1. Merchant-specific rule → stored per-merchant in persistent storage via `set_settlement_rule`
+  2. Global default rule → stored globally in instance storage via `set_default_rule`
+  3. Governance fee config → protocol fee ceilings fetched from governance contract (`read_governance_fee_rule`)
+  4. Bootstrap fallback → hardcoded in contract code as `BOOTSTRAP_DEFAULT_RULE`
+- Event emission semantics:
+  - Mutating payment path: `store_payment_reference` emits a `bootstrap_fallback` event when the resolved rule equals `BOOTSTRAP_DEFAULT_RULE`, alerting operators and indexers of an unconfigured deployment.
+  - Read-only paths: `calculate_fee_split` and `get_effective_rule` are pure queries and never emit `bootstrap_fallback`.
+  - Administrative clearing: `clear_settlement_rule` and `unregister_merchant` resolve fallback via `read_fallback_rule` and do not emit a duplicate bootstrap event.
+- See [`docs/bootstrap-fallback.md`](../docs/bootstrap-fallback.md) for full specification and semantics.
 
 ## Consequences
 

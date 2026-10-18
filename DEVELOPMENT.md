@@ -8,6 +8,7 @@ the [README](README.md).
 
 - [Contract Upgrades](#contract-upgrades)
 - [Storage Layout](#storage-layout)
+- [Lifecycle & Architecture Specifications](#lifecycle--architecture-specifications)
 - [Two Constraints That Shape Every Migration](#two-constraints-that-shape-every-migration)
 - [The Migration Pattern](#the-migration-pattern)
 - [Migrating Entries You Cannot Enumerate](#migrating-entries-you-cannot-enumerate)
@@ -42,7 +43,7 @@ you have to solve deliberately.
 
 ## Storage Layout
 
-What is on the ledger today, and which storage kind holds it.
+What is on the ledger today, and which storage kind holds it. See [`docs/storage-key-ownership.md`](docs/storage-key-ownership.md) for authoritative cross-crate ownership and TTL policies.
 
 ### Settlement contract
 
@@ -71,7 +72,7 @@ The following instance keys are shared across contracts via `bettapay_common::st
 | `Paused` | instance (`CommonDataKey`) | `bool` (pause flag) |
 | `Threshold` | instance (`CommonDataKey`) | `u32` (multisig admin threshold) |
 
-Note that `RecoveryAddress`, `PendingRecovery`, `Paused`, and `Threshold` are shared through `CommonDataKey` (from `bettapay_common::storage`), while `Admin` remains local (`Vec<Address>`) under each contract's own `DataKey`.
+Note that `RecoveryAddress`, `PendingRecovery`, `Paused`, and `Threshold` are shared through `CommonDataKey` (from `bettapay_common::storage`), while `Admin` remains local (`Vec<Address>`) under each contract's own `DataKey`. See [Storage Key Ownership](docs/storage-key-ownership.md) and [Recovery Lifecycle](docs/recovery-lifecycle.md).
 
 ### Governance contract
 
@@ -103,6 +104,14 @@ The split matters for migrations:
   `SystemParam(_)`) — one entry per address, reference or symbol, and the set
   of live keys is not recorded anywhere on-chain. These are the hard case, and
   the [section below](#migrating-entries-you-cannot-enumerate) is about them.
+
+## Lifecycle & Architecture Specifications
+
+For detailed architectural lifecycles, timing rules, and collision models:
+- **[Scheduled Operation Lifecycle](docs/scheduled-operation-lifecycle.md)**: Defines states (`Unscheduled`, `Scheduled`, `Executed`, `Cancelled`), SHA-256 indexing with stored byte checks, duplicate reschedule (`OperationAlreadyScheduled` 12) vs. genuine hash collision (`OperationHashCollision` 316), minimum 7-day delay (`ExecutionNotReady` 10), recovery veto, permissionless execution, and the 9 operation variants.
+- **[Admin Recovery Lifecycle](docs/recovery-lifecycle.md)**: End-to-end admin recovery sequence across actors (recovery address, admin multisig, permissionless executor), 7-day `RECOVERY_DELAY_SECONDS`, cancellation rules, failure modes (`RecoveryNotPending` 8, `RecoveryDelayActive` 9, `RecoveryAlreadyPending` 15), and timelock veto semantics.
+- **[Bootstrap Fallback Semantics](docs/bootstrap-fallback.md)**: Details the 4-tier settlement fallback chain (merchant → default → governance → bootstrap), trigger conditions, constant values (`100` platform bps, `5` network bps, `0` delay, `auto_settle` false), and event emission rules.
+- **[Storage Key Ownership and TTL Policies](docs/storage-key-ownership.md)**: Comprehensive mapping of all storage keys across `bettapay_common`, `settlement_contract`, and `governance_contract`.
 
 ## Two Constraints That Shape Every Migration
 
