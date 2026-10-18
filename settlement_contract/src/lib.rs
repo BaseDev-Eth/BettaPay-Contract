@@ -38,31 +38,51 @@
 //! from `payment_stored` events (or other indexer-sourced sources). Each reference is then
 //! looked up individually via `get_payment_reference`.
 //!
-//! ## Storage Key Ownership (issue #772)
+//! ## Storage Key Ownership (issues #772, #930)
 //!
-//! Which ledger each key lives in, and how long it lives:
+//! Authoritative mapping of storage keys across the contract ecosystem, their owning
+//! crates, storage kinds, and TTL policies:
 //!
-//! | `DataKey` variant            | Ledger type | TTL policy |
-//! |------------------------------|-------------|------------|
-//! | `Admin`                      | Instance (singleton multisig `Vec<Address>`) | Instance TTL; reads bump via `READ_INSTANCE_TTL_THRESHOLD` / `READ_INSTANCE_TTL_BUMP` |
-//! | `Initializing`               | Instance (ephemeral init guard) | No TTL management; set at the start of `init`, removed when `init` completes |
-//! | `Governance`                 | Instance (singleton address) | Instance TTL; reads bump via `READ_INSTANCE_TTL_THRESHOLD` / `READ_INSTANCE_TTL_BUMP` |
-//! | `Deployer`                   | Instance (set once at `init`) | Instance TTL; written once to gate init to the deployer, never expires independently of the instance |
-//! | `SchemaVersion`              | Instance (singleton `u32`) | Instance TTL; written at `init`, advanced by `migrate` |
-//! | `DefaultRule`                | Instance (singleton `SettlementRule`) | Instance TTL; lives as long as the contract instance, cannot expire independently |
-//! | `Merchant(Address)`          | Persistent (one entry per merchant) | `MERCHANT_TTL_THRESHOLD` / `MERCHANT_TTL_BUMP` (14d / 30d); bumped only on merchant- or admin-authed writes, never on public reads |
-//! | `Rule(Address)`              | Persistent (one entry per merchant override) | `RULE_TTL_THRESHOLD` / `RULE_TTL_BUMP` (14d / 30d); bumped on rule writes and reads |
-//! | `ArchivedMerchant(Address)`  | Persistent (tombstone) | Persistent TTL; written on `unregister_merchant`, survives re-registration guard until cleared on re-register |
-//! | `Payment(Address, BytesN<32>)` | Persistent (one entry per merchant + reference, high volume) | `PAYMENT_TTL_THRESHOLD` / `PAYMENT_TTL_BUMP` (14d / 30d); bumped on store and on payment reads |
-//! | `ScheduledOperation(BytesN<32>)` | Persistent (one entry per scheduled op hash) | `SCHEDULED_OP_TTL_THRESHOLD` / `SCHEDULED_OP_TTL_BUMP` (14d / 30d); removed on `execute` / `cancel` |
-//! | `CommonDataKey::Threshold`   | Instance (multisig threshold `u32`) | Instance TTL; reads bump via `READ_INSTANCE_TTL_THRESHOLD` / `READ_INSTANCE_TTL_BUMP` |
-//! | `CommonDataKey::RecoveryAddress` | Instance (singleton address) | Instance TTL; reads bump via `READ_INSTANCE_TTL_THRESHOLD` / `READ_INSTANCE_TTL_BUMP` |
-//! | `CommonDataKey::PendingRecovery` | Instance (optional in-flight recovery) | Instance TTL; removed on `execute_recovery` / `cancel_recovery` / timelocked `CancelRecovery` |
-//! | `CommonDataKey::Paused`      | Instance (pause flag) | Instance TTL; lives as long as the contract instance |
+//! | Key | Owning Crate | Storage Kind | TTL Policy | Notes |
+//! |---|---|---|---|---|
+//! | `CommonDataKey::RecoveryAddress` | `bettapay_common` | Instance | Instance TTL (`50k` / `100k` ledgers) | **Shared**: Singleton recovery address |
+//! | `CommonDataKey::PendingRecovery` | `bettapay_common` | Instance | Instance TTL | **Shared**: Active recovery state; acts as timelock veto in settlement |
+//! | `CommonDataKey::Paused` | `bettapay_common` | Instance | Instance TTL | **Shared**: Global emergency pause flag |
+//! | `CommonDataKey::Threshold` | `bettapay_common` | Instance | Instance TTL (`50k` / `100k` ledgers) | **Shared**: Multisig admin signature threshold |
+//! | `DataKey::Admin` | `settlement_contract` | Instance | Instance TTL (`50k` / `100k` ledgers) | **Contract-Local**: Multisig `Vec<Address>` (governance has independent `Admin`) |
+//! | `DataKey::Initializing` | `settlement_contract` | Instance | Ephemeral | **Contract-Local / Settlement-Only**: Sentinel guard against init reentrancy |
+//! | `DataKey::Governance` | `settlement_contract` | Instance | Instance TTL (`50k` / `100k` ledgers) | **Contract-Local / Settlement-Only**: Address of governance contract |
+//! | `DataKey::Deployer` | `settlement_contract` | Instance | Instance TTL | **Contract-Local**: Deployer address gating init front-running |
+//! | `DataKey::SchemaVersion` | `settlement_contract` | Instance | Instance TTL | **Contract-Local**: Storage schema version (mirrored locally in governance) |
+//! | `DataKey::CachedGovRule` | `settlement_contract` | Instance | Instance TTL | **Contract-Local / Settlement-Only**: Caches last-good governance fee config |
+//! | `DataKey::DefaultRule` | `settlement_contract` | Instance | Instance TTL | **Contract-Local / Settlement-Only**: Singleton global default rule |
+//! | `DataKey::Merchant(Address)` | `settlement_contract` | Persistent | `14d` threshold / `30d` bump (`241,920` / `518,400` ledgers) | **Contract-Local / Settlement-Only**: Bumped on merchant/admin writes only |
+//! | `DataKey::Rule(Address)` | `settlement_contract` | Persistent | `14d` threshold / `30d` bump (`241,920` / `518,400` ledgers) | **Contract-Local / Settlement-Only**: Bumped on rule writes and authenticated reads |
+//! | `DataKey::ArchivedMerchant(Address)` | `settlement_contract` | Persistent | `14d` threshold / `30d` bump (`241,920` / `518,400` ledgers) | **Contract-Local / Settlement-Only**: Tombstone written on unregister |
+//! | `DataKey::Payment(Address, BytesN<32>)` | `settlement_contract` | Persistent | `14d` threshold / `30d` bump (`241,920` / `518,400` ledgers) | **Contract-Local / Settlement-Only**: Scoped by merchant and payment reference |
+//! | `DataKey::ScheduledOperation(BytesN<32>)` | `settlement_contract` | Persistent | `14d` threshold / `30d` bump (`241,920` / `518,400` ledgers) | **Contract-Local / Settlement-Only**: Timelocked operation payload and execute_at |
+//! | `governance_contract::DataKey::Admin` | `governance_contract` | Instance | Instance TTL (`50k` / `100k` ledgers) | **Contract-Local**: Governance admin set |
+//! | `governance_contract::DataKey::FeeConfig` | `governance_contract` | Instance | Instance TTL | **Contract-Local / Governance-Only**: Protocol fee ceilings |
+//! | `governance_contract::DataKey::SchemaVersion` | `governance_contract` | Instance | Instance TTL | **Contract-Local**: Governance schema version |
+//! | `governance_contract::DataKey::Deployer` | `governance_contract` | Instance | Instance TTL | **Contract-Local**: Governance deployer front-running guard |
+//! | `governance_contract::DataKey::Anchor(Address)` | `governance_contract` | Persistent | `14d` threshold / `30d` bump (`241,920` / `518,400` ledgers) | **Contract-Local / Governance-Only**: Anchor address per asset |
+//! | `governance_contract::DataKey::SystemParam(Symbol)` | `governance_contract` | Persistent | `14d` threshold / `30d` bump (`241,920` / `518,400` ledgers) | **Contract-Local / Governance-Only**: Numeric system configuration parameter |
+//!
+//! ### Key Segregation and Sharing Callouts
+//! - **Shared Keys**: `Threshold`, `Paused`, `RecoveryAddress`, and `PendingRecovery` are declared
+//!   in `bettapay_common::storage::CommonDataKey` and shared across both contracts without redeclaration.
+//! - **Contract-Local Admin**: `Admin` is contract-local (`Vec<Address>`) declared in each contract's
+//!   own `DataKey` enum, preserving administrative separation.
+//! - **Settlement-Only Keys**: `CachedGovRule`, `Initializing`, `Governance`, `DefaultRule`, `Merchant`,
+//!   `Rule`, `ArchivedMerchant`, `Payment`, and `ScheduledOperation`.
+//! - **Governance-Only Keys**: `FeeConfig`, `Anchor`, and `SystemParam`.
+//! - **Local Duplications**: `SchemaVersion` and `Deployer` are declared locally in each contract
+//!   to manage contract-specific migration baselines and deployer authorization independently.
 //!
 //! Rule of thumb: instance keys are singletons tied to the contract instance
 //! lifetime (no independent expiry); persistent keys are per-entity records
 //! that must be kept warm with `extend_ttl` or they are evicted.
+//! See also `docs/storage-key-ownership.md` for full cross-crate documentation.
 //!
 //! ## Payment Reads
 //!

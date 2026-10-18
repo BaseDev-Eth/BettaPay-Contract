@@ -51,4 +51,24 @@ grep -Fq "| Error | \`${error_limit}\`" "$WASM_DOC" || {
   exit 1
 }
 
-echo "Documented contract limits match source values."
+BOOTSTRAP_DOC="$ROOT_DIR/docs/bootstrap-fallback.md"
+if [ -f "$BOOTSTRAP_DOC" ]; then
+  grep -Fq '| `platform_fee_bps` | `100` |' "$BOOTSTRAP_DOC" || {
+    echo "Documentation drift: platform_fee_bps in bootstrap doc should be 100" >&2
+    exit 1
+  }
+  grep -Fq '| `network_fee_bps` | `5` |' "$BOOTSTRAP_DOC" || {
+    echo "Documentation drift: network_fee_bps in bootstrap doc should be 5" >&2
+    exit 1
+  }
+  grep -Fq '| `settlement_delay_ledger` | `0` |' "$BOOTSTRAP_DOC" || {
+    echo "Documentation drift: settlement_delay_ledger in bootstrap doc should be 0" >&2
+    exit 1
+  }
+  grep -Fq '| `auto_settle` | `false` |' "$BOOTSTRAP_DOC" || {
+    echo "Documentation drift: auto_settle in bootstrap doc should be false" >&2
+    exit 1
+  }
+fi
+
+echo "Documented contract limits and bootstrap defaults match source values."

@@ -255,7 +255,8 @@ pub(crate) fn is_merchant_registered_and_bump_ttl(env: &Env, merchant: Address) 
 }
 
 /// Resolves the effective settlement rule for a merchant by preferring the merchant-specific override,
-/// then falling back to the global default, and finally using the bootstrap fallback.
+/// then falling back to the global default, then governance fee config, and finally using the bootstrap fallback.
+/// See `docs/bootstrap-fallback.md` for full semantics, trigger conditions, and emission rules.
 ///
 /// This is a **pure resolution** function — it does NOT emit events.
 /// Callers that need to signal an unconfigured deployment (e.g. mutating
