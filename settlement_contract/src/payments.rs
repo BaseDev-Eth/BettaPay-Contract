@@ -16,13 +16,13 @@ use crate::{SettlementContract, SettlementContractClient};
 
 /// Computes the platform, network, and merchant fee amounts for an amount using ceil-based rounding.
 ///
-/// # Known edge case: clamping merchant amount
+/// # Known edge case: clamping merchant payout
 ///
 /// Ceiling rounding of both fees independently can make
 /// `platform_fee_amount + network_fee_amount > amount` for small gross amounts
 /// (e.g. `amount = 1`, `platform_fee_bps = 5000`, `network_fee_bps = 5000`).
 /// This yields a negative subtraction remainder. The policy is to clamp the
-/// `merchant_amount` to zero, ensuring fees are not under-collected but the
+/// `merchant_payout_amount` to zero, ensuring fees are not under-collected but the
 /// merchant never owes a negative balance for a settlement.
 fn calculate_split(env: &Env, amount: i128, rule: &SettlementRule) -> FeeSplit {
     let denom = BPS_DENOMINATOR as i128;
@@ -77,7 +77,7 @@ fn calculate_split(env: &Env, amount: i128, rule: &SettlementRule) -> FeeSplit {
         network_fee_amount = amount.checked_sub(platform_fee_amount).unwrap_or(0).max(0);
     }
 
-    let merchant_amount = amount
+    let merchant_payout_amount = amount
         .checked_sub(platform_fee_amount)
         .and_then(|remainder| remainder.checked_sub(network_fee_amount))
         .unwrap_or(0)
@@ -86,7 +86,7 @@ fn calculate_split(env: &Env, amount: i128, rule: &SettlementRule) -> FeeSplit {
         gross_amount: amount,
         platform_fee_amount,
         network_fee_amount,
-        merchant_amount,
+        merchant_payout_amount,
     }
 }
 
@@ -140,9 +140,9 @@ mod tests {
         assert_eq!(split.gross_amount, amount);
         assert_eq!(split.platform_fee_amount, 0);
         assert_eq!(split.network_fee_amount, 0);
-        assert_eq!(split.merchant_amount, amount);
+        assert_eq!(split.merchant_payout_amount, amount);
         assert_eq!(
-            split.platform_fee_amount + split.network_fee_amount + split.merchant_amount,
+            split.platform_fee_amount + split.network_fee_amount + split.merchant_payout_amount,
             split.gross_amount,
         );
     }
@@ -210,10 +210,10 @@ mod tests {
 
         assert_eq!(split.gross_amount, amount);
         assert_eq!(
-            split.platform_fee_amount + split.network_fee_amount + split.merchant_amount,
+            split.platform_fee_amount + split.network_fee_amount + split.merchant_payout_amount,
             amount,
         );
-        assert!(split.merchant_amount >= 0);
+        assert!(split.merchant_payout_amount >= 0);
     }
 
     #[test]
@@ -224,7 +224,7 @@ mod tests {
 
         assert_eq!(split.platform_fee_amount, 1);
         assert_eq!(split.network_fee_amount, 0);
-        assert_eq!(split.merchant_amount, 0);
+        assert_eq!(split.merchant_payout_amount, 0);
     }
 
     #[test]
@@ -234,7 +234,7 @@ mod tests {
 
         assert_eq!(split.platform_fee_amount, 250);
         assert_eq!(split.network_fee_amount, 50);
-        assert_eq!(split.merchant_amount, 9_700);
+        assert_eq!(split.merchant_payout_amount, 9_700);
     }
 
     proptest! {
@@ -278,8 +278,8 @@ mod tests {
 
             prop_assert_eq!(split.platform_fee_amount, expected_platform);
             prop_assert_eq!(split.network_fee_amount, clamped_network);
-            prop_assert_eq!(split.merchant_amount, clamped_merchant);
-            prop_assert!(split.merchant_amount >= 0);
+            prop_assert_eq!(split.merchant_payout_amount, clamped_merchant);
+            prop_assert!(split.merchant_payout_amount >= 0);
         }
 
         #[test]
@@ -298,15 +298,15 @@ mod tests {
 
             prop_assert_eq!(split.platform_fee_amount, 0);
             prop_assert_eq!(split.network_fee_amount, 0);
-            prop_assert_eq!(split.merchant_amount, amount);
+            prop_assert_eq!(split.merchant_payout_amount, amount);
             prop_assert_eq!(
-                split.platform_fee_amount + split.network_fee_amount + split.merchant_amount,
+                split.platform_fee_amount + split.network_fee_amount + split.merchant_payout_amount,
                 amount,
             );
         }
 
         #[test]
-        fn extreme_fees_clamp_merchant_amount_to_zero(
+        fn extreme_fees_clamp_merchant_payout_to_zero(
             amount in 1i128..=10,
         ) {
             let env = Env::default();
@@ -328,7 +328,7 @@ mod tests {
             // network_fee may be clamped to 0 when total fees exceed gross
             // (issue #683), but merchant must always be non-negative.
             prop_assert!(split.network_fee_amount >= 0);
-            prop_assert_eq!(split.merchant_amount, 0);
+            prop_assert_eq!(split.merchant_payout_amount, 0);
         }
     }
 }
@@ -423,12 +423,13 @@ impl SettlementContract {
             amount: 0,
             platform_fee_amount: 0,
             network_fee_amount: 0,
-            merchant_amount: 0,
+            merchant_payout_amount: 0,
             platform_fee_bps: 0,
             network_fee_bps: 0,
             ledger: 0,
             settlement_delay_ledger: 0,
             auto_settle: false,
+            version: 1,
         };
         env.storage().persistent().set(&payment_key, &dummy_record);
 
@@ -445,12 +446,13 @@ impl SettlementContract {
             amount,
             platform_fee_amount: split.platform_fee_amount,
             network_fee_amount: split.network_fee_amount,
-            merchant_amount: split.merchant_amount,
+            merchant_payout_amount: split.merchant_payout_amount,
             platform_fee_bps: rule.platform_fee_bps,
             network_fee_bps: rule.network_fee_bps,
             ledger: env.ledger().sequence(),
             settlement_delay_ledger: rule.settlement_delay_ledger,
             auto_settle: rule.auto_settle,
+            version: 1,
         };
 
         env.storage().persistent().set(&payment_key, &record);
@@ -510,6 +512,54 @@ impl SettlementContract {
             .persistent()
             .remove(&DataKey::Payment(merchant, reference));
     }
+
+    /// Remove several of one merchant's payment references in a single call
+    /// after the configured admin threshold has authorized the operation.
+    ///
+    /// Issue #983: the bounded batch form of [`prune_payment`](Self::prune_payment).
+    /// References that are not stored (never existed, already pruned, or
+    /// repeated within `refs`) are skipped as no-ops, so a cleanup can be
+    /// retried safely. One `payments_pruned` event is emitted per call with
+    /// topics `(Symbol("payments_pruned"), merchant)` and data
+    /// `(admin, removed_count)`, where `removed_count` is the number of
+    /// records actually deleted. There are no accounting or refund side effects.
+    ///
+    /// # Panics
+    ///
+    /// * [`BatchTooLarge`](SettlementError::BatchTooLarge) — if `refs` exceeds
+    ///   [`MAX_PAYMENTS_BATCH`].
+    /// * Auth failure — if the signers do not satisfy the admin threshold.
+    pub fn prune_payments(
+        env: Env,
+        signers: Vec<Address>,
+        merchant: Address,
+        refs: Vec<BytesN<32>>,
+    ) -> u32 {
+        verify_admin_auth(&env, &signers, read_threshold(&env));
+        if refs.len() > MAX_PAYMENTS_BATCH {
+            panic_with_error!(&env, SettlementError::BatchTooLarge);
+        }
+
+        let mut removed: u32 = 0;
+        for reference in refs.iter() {
+            let key = DataKey::Payment(merchant.clone(), reference);
+            if env.storage().persistent().has(&key) {
+                env.storage().persistent().remove(&key);
+                removed += 1;
+            }
+        }
+
+        let admin = signers.get(0).unwrap();
+        env.events().publish(
+            (
+                Symbol::new(&env, events::PAYMENTS_PRUNED_EVENT),
+                merchant,
+            ),
+            (admin, removed),
+        );
+        removed
+    }
+
     /// Retrieve a payment record for a merchant by its reference, extending
     /// the storage TTL if found.
     ///

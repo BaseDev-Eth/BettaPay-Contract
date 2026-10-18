@@ -126,7 +126,7 @@ contract of its own.
 
 ## The Migration Pattern
 
-*Note: The governance contract now ships a `SchemaVersion` marker (written at `init`) and an admin-gated, idempotent `migrate` entry point (issue #507). The settlement contract has not adopted the marker yet; this section remains the template for when it does.*
+*Note: Both contracts ship a `SchemaVersion` marker (written at `init`) and an admin-gated, idempotent `migrate` entry point (issues #507, #704). Since issue #984, `migrate` is rejected while paused and, when the stored version is below `CURRENT_SCHEMA_VERSION`, calls a `migrate_step(env, from_version)` hook once per version crossed and then advances the marker. At `CURRENT_SCHEMA_VERSION` it is a no-op. To ship a conversion, bump `CURRENT_SCHEMA_VERSION` and add its step to that hook in each affected contract. The order is always: upgrade the Wasm, call `migrate`, verify.*
 
 Ordering is the point: the code that can read both formats has to be deployed
 before anything is rewritten.
@@ -242,6 +242,23 @@ batch calls above.
 **Rule of thumb:** use lazy migration for parameterised keys and an eager
 `migrate` for fixed keys. They compose — one `migrate` call for the singletons,
 lazy conversion for the long tail.
+
+## PaymentRecord Schema Versioning
+
+As of issue #967, `PaymentRecord` includes a `version: u32` field written at
+storage time. New records are written with `version = 1`.
+
+**Old records:** Entries stored before this field existed have no `version` key
+and are detected by the field's absence during deserialization. Callers must
+treat missing `version` as `version = 0`. The field is encoded by name in the
+`#[contracttype]` map, so older contract versions will not decode the entry at
+all if the field is present (name-based encoding protects against silent
+corruption).
+
+**Future migrations:** The `version` field supports deterministic evolution
+without renaming the struct. When adding new fields, increment the version and
+pair it with a conversion function that maps old shapes to new ones,
+following the lazy-migration pattern shown in the next section.
 
 ## Worked Example: Adding a Field to `PaymentRecord`
 

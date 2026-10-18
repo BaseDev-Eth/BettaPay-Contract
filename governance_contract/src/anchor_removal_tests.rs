@@ -1,7 +1,7 @@
 //! Anchor removal verification test
 
 use soroban_sdk::testutils::Address as _;
-use soroban_sdk::Address;
+use soroban_sdk::{Address, Error};
 
 use super::setup;
 use super::*;
@@ -18,9 +18,12 @@ fn anchor_removal_clears_entry() {
 }
 
 #[test]
-#[should_panic]
 fn rejects_removing_unregistered_anchor() {
     let (env, client, admin) = setup();
     let missing_asset = Address::generate(&env);
-    client.remove_anchor(&admin, &missing_asset);
+    let result = client.try_remove_anchor(&admin, &missing_asset);
+    assert!(
+        matches!(result, Err(Ok(e)) if e == Error::from_contract_error(GovernanceError::AnchorMissing as u32)),
+        "remove_anchor must reject unregistered anchor with AnchorMissing"
+    );
 }

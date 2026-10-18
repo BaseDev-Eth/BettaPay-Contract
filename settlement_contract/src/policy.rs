@@ -25,7 +25,8 @@ pub const MAX_SETTLEMENT_DELAY_LEDGER: u32 = 100_000;
 /// Default settlement delay period applied as a fallback (1 day equivalent in ledgers)
 pub const FALLBACK_SETTLEMENT_DELAY_LEDGER: u32 = 17280;
 
-/// Maximum number of payments that can be retrieved in a single batch lookup
+/// Maximum number of payments that can be retrieved (`get_payments`) or
+/// pruned (`prune_payments`) in a single batch call
 pub const MAX_PAYMENTS_BATCH: u32 = 100;
 
 /// Maximum number of payment records that may be stored per merchant.
@@ -103,7 +104,7 @@ pub const CURRENT_SCHEMA_VERSION: u32 = 1;
 /// | `governance_fee_ceiling` | fee rules validated against governance's `FeeConfig` |
 /// | `fee_split_preview`      | `calculate_fee_split` |
 /// | `batch_payment_read`     | `get_payments` |
-/// | `payment_pruning`        | `prune_payment` |
+/// | `payment_pruning`        | `prune_payment` / `prune_payments` |
 ///
 /// The set is fixed at compile time: flags are never toggled at runtime, and
 /// every listed flag is reported as `true`. Adding or removing a flag is a

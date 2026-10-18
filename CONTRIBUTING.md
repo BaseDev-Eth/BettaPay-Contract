@@ -267,6 +267,9 @@ cargo test -p settlement_contract merchant_lifecycle_uses_canonical_topics
 
 ### Test snapshots
 
+The full snapshot workflow, including intentional-drift review and CI behavior,
+is documented in [docs/test-snapshots.md](docs/test-snapshots.md).
+
 Soroban's `Env` test harness writes a JSON snapshot for every `#[test]` under each crate's `test_snapshots/` directory. The path always mirrors the test's Rust module path — keep that in mind when adding or moving test files:
 
 - Tests declared directly inside `#[cfg(test)] mod tests { ... }` (in `src/lib.rs`, or in a crate's `src/tests/mod.rs`) land in `test_snapshots/tests/<test_name>.json`.

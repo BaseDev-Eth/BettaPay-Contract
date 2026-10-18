@@ -432,3 +432,72 @@ fn store_payment_gas_snapshot() {
         "Memory bytes ({mem}) exceeded baseline bound"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Batch payment pruning (issue #983)
+// ---------------------------------------------------------------------------
+
+fn payment_ref(env: &Env, i: u8) -> BytesN<32> {
+    let mut bytes = [0u8; 32];
+    bytes[0] = 1;
+    bytes[31] = i;
+    BytesN::from_array(env, &bytes)
+}
+
+/// `prune_payments` removes every stored reference, skips missing and
+/// repeated ones without failing, leaves other references untouched, emits one
+/// summary event carrying the removed count, and can be retried safely.
+#[test]
+fn prune_payments_removes_present_refs_and_ignores_missing() {
+    use soroban_sdk::testutils::Events;
+    use soroban_sdk::{FromVal, Symbol};
+
+    let (env, client, admins, merchant) = setup();
+    client.register_merchant(&admins, &merchant);
+
+    let kept = payment_ref(&env, 3);
+    let (r0, r1, r2) = (payment_ref(&env, 0), payment_ref(&env, 1), payment_ref(&env, 2));
+    for r in [&r0, &r1, &r2, &kept] {
+        client.store_payment_reference(&merchant, r, &1_000);
+    }
+
+    let missing = payment_ref(&env, 99);
+    let refs = soroban_sdk::vec![&env, r0.clone(), missing, r1.clone(), r2.clone(), r0.clone()];
+    let removed = client.prune_payments(&admins, &merchant, &refs);
+    assert_eq!(removed, 3);
+
+    let none = soroban_sdk::vec![&env];
+    for r in [&r0, &r1, &r2] {
+        assert!(client.get_payment_reference(&merchant, r, &none).is_none());
+    }
+    assert!(client
+        .get_payment_reference(&merchant, &kept, &none)
+        .is_some());
+
+    let (_, topics, _) = env.events().all().last().unwrap();
+    assert_eq!(
+        Symbol::from_val(&env, &topics.get(0).unwrap()),
+        Symbol::new(&env, bettapay_common::events::PAYMENTS_PRUNED_EVENT)
+    );
+
+    // Retrying the same batch is a no-op rather than an error.
+    assert_eq!(client.prune_payments(&admins, &merchant, &refs), 0);
+}
+
+/// A batch above `MAX_PAYMENTS_BATCH` is rejected with `BatchTooLarge`.
+#[test]
+fn prune_payments_rejects_oversized_batch() {
+    let (env, client, admins, merchant) = setup();
+    client.register_merchant(&admins, &merchant);
+
+    let mut refs = soroban_sdk::Vec::new(&env);
+    for _ in 0..=MAX_PAYMENTS_BATCH {
+        refs.push_back(payment_ref(&env, 1));
+    }
+    assert!(matches!(
+        client.try_prune_payments(&admins, &merchant, &refs),
+        Err(Ok(e)) if e == soroban_sdk::Error::from_contract_error(
+            SettlementError::BatchTooLarge as u32
+        )
+    ));
+}

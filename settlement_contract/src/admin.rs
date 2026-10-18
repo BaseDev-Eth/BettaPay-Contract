@@ -16,14 +16,50 @@ use crate::policy::{
     SCHEDULED_OP_TTL_THRESHOLD, SUPPORTED_INTERFACE_VERSION,
 };
 use crate::storage::{
-    assert_not_paused, is_merchant_registered_and_bump_ttl, is_merchant_registered_internal,
-    read_admin, read_admins, read_fallback_rule, read_governance, read_optional_primary_admin,
-    read_pending_recovery, read_recovery_address, read_rule_or_default, read_schema_version,
-    read_threshold, validate_admins_and_threshold, validate_fee_against_governance,
-    validate_governance, validate_nonzero_address, verify_admin_auth, write_admins,
+    assert_governance_reachable, assert_not_paused, is_merchant_registered_and_bump_ttl,
+    is_merchant_registered_internal, read_admin, read_admins, read_fallback_rule, read_governance,
+    read_optional_primary_admin, read_pending_recovery, read_recovery_address,
+    read_rule_or_default, read_schema_version, read_threshold, validate_admins_and_threshold,
+    validate_fee_against_governance, validate_governance, validate_nonzero_address,
+    verify_admin_auth, write_admins,
 };
 use crate::types::{DataKey, Operation, ScheduledOp, SettlementRule};
 use crate::{SettlementContract, SettlementContractClient};
+
+/// Migration hook keyed to `CURRENT_SCHEMA_VERSION` (issue #984).
+///
+/// Called by `migrate` once for every version bump, with `from_version` set to
+/// the stored version being left behind (so the step converts `from_version`
+/// records to `from_version + 1`). `migrate` writes the advanced
+/// `SchemaVersion` after each step, so a step only has to convert records.
+///
+/// A step must be idempotent. To ship a conversion, bump
+/// `CURRENT_SCHEMA_VERSION` and add the arm here, e.g.:
+///
+/// ```ignore
+/// if from_version == 1 {
+///     migrate_v1_to_v2(env);
+/// }
+/// ```
+///
+/// There is no stored-format difference to convert yet, so no step does any
+/// work and `migrate` only advances the marker.
+fn migrate_step(_env: &Env, from_version: u32) {
+    let _ = from_version;
+}
+
+/// Advances the stored `SchemaVersion` to `CURRENT_SCHEMA_VERSION`, running
+/// `migrate_step` for each version crossed. A no-op when already current.
+fn run_migrations(env: &Env) {
+    let mut version = read_schema_version(env);
+    while version < CURRENT_SCHEMA_VERSION {
+        migrate_step(env, version);
+        version += 1;
+        env.storage()
+            .instance()
+            .set(&DataKey::SchemaVersion, &version);
+    }
+}
 
 #[contractimpl]
 impl SettlementContract {
@@ -415,6 +451,11 @@ impl SettlementContract {
     /// `CURRENT_SCHEMA_VERSION`. It is admin-gated and idempotent: a
     /// contract already at `CURRENT_SCHEMA_VERSION` is a no-op.
     ///
+    /// Issue #984: a stored `SchemaVersion` below `CURRENT_SCHEMA_VERSION` is
+    /// advanced one version at a time through `migrate_step`, the hook where
+    /// real record conversions go. Run it as upgrade, then `migrate`, then
+    /// verify (see the Upgrade Process in the crate docs).
+    ///
     /// # Panics
     ///
     /// * [`Paused`](SettlementError::Paused) — if the contract is paused.
@@ -424,11 +465,7 @@ impl SettlementContract {
         assert_not_paused(&env);
         let admin = signers.get(0).unwrap();
 
-        if read_schema_version(&env) < CURRENT_SCHEMA_VERSION {
-            env.storage()
-                .instance()
-                .set(&DataKey::SchemaVersion, &CURRENT_SCHEMA_VERSION);
-        }
+        run_migrations(&env);
         env.events().publish(
             (Symbol::new(&env, events::MIGRATED_EVENT),),
             (admin, CURRENT_SCHEMA_VERSION),
@@ -447,6 +484,8 @@ impl SettlementContract {
     /// * [`Paused`](SettlementError::Paused) — if the contract is currently paused.
     /// * [`Unauthorized`](SettlementError::Unauthorized) — if signers lack admin authority.
     /// * [`ExecutionNotReady`](SettlementError::ExecutionNotReady) — if `execute_in` is less than `MIN_TIMELOCK_DELAY_SECONDS`.
+    /// * [`GovernanceCallFailed`](SettlementError::GovernanceCallFailed) — if the governance
+    ///   liveness probe (`get_fee_config`) fails (issue #994). Nothing is written.
     /// * [`OperationAlreadyScheduled`](SettlementError::OperationAlreadyScheduled) — if the operation is already in the queue.
     pub fn schedule(env: Env, signers: Vec<Address>, operation: Operation, execute_in: u64) {
         verify_admin_auth(&env, &signers, read_threshold(&env));
@@ -468,6 +507,11 @@ impl SettlementContract {
                 panic_with_error!(&env, SettlementError::InvalidSettlementDelay);
             }
         }
+
+        // Issue #994: probe governance before anything is written so an
+        // unreachable governance surfaces as `GovernanceCallFailed` now,
+        // rather than leaving operators with a stuck queue later.
+        assert_governance_reachable(&env);
 
         let operation_xdr = operation.clone().to_xdr(&env);
         let op_hash: BytesN<32> = env.crypto().sha256(&operation_xdr).into();
