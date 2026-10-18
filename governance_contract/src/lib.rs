@@ -185,8 +185,8 @@
 
 use bettapay_common::{
     constants::{
-        BPS_DENOMINATOR, MAX_FEE_BPS, MIN_FEE_BPS, RECOVERY_DELAY_SECONDS, TTL_BUMP_LEDGERS,
-        TTL_THRESHOLD_LEDGERS,
+        BPS_DENOMINATOR, MAX_FEE_BPS, MIN_FEE_BPS, PAUSE_REASON_NONE, RECOVERY_DELAY_SECONDS,
+        TTL_BUMP_LEDGERS, TTL_THRESHOLD_LEDGERS,
     },
     error_codes,
     events::{self, AdminTransferred, PendingRecovery},
@@ -660,7 +660,9 @@ impl GovernanceContract {
             panic_with_error!(&env, GovernanceError::AlreadyPaused);
         }
         let admin = signers.get(0).unwrap();
-        storage::apply_pause(&env, &admin);
+        // No reason exposed on this entry point (issue #991 scope: settlement
+        // only); pass the shared "unspecified" sentinel through.
+        storage::apply_pause(&env, &admin, PAUSE_REASON_NONE);
     }
 
     pub fn unpause(env: Env, signers: Vec<Address>) {
