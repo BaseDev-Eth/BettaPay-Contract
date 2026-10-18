@@ -5,8 +5,8 @@ use bettapay_common::events;
 use crate::errors::SettlementError;
 use crate::policy::{MERCHANT_TTL_BUMP, MERCHANT_TTL_THRESHOLD};
 use crate::storage::{
-    assert_not_paused, is_merchant_registered_read, read_fallback_rule, read_threshold,
-    validate_nonzero_address, verify_admin_auth,
+    assert_admin_and_not_paused, assert_not_paused, is_merchant_registered_read,
+    read_fallback_rule, read_threshold, validate_nonzero_address, verify_admin_auth,
 };
 use crate::types::{DataKey, SettlementRule};
 use crate::{SettlementContract, SettlementContractClient};
@@ -22,11 +22,9 @@ impl SettlementContract {
     /// * [`InvalidAdmin`](SettlementError::InvalidAdmin) — if attempting to register an admin as a merchant.
     /// * [`MerchantExists`](SettlementError::MerchantExists) — if the merchant is already registered.
     pub fn register_merchant(env: Env, signers: Vec<Address>, merchant: Address) {
-        assert_not_paused(&env);
+        assert_admin_and_not_paused(&env, &signers);
 
         validate_nonzero_address(&env, &merchant, SettlementError::ZeroAddress);
-
-        verify_admin_auth(&env, &signers, read_threshold(&env));
         let admin = signers.get(0).unwrap();
 
         // Prevent an admin from being registered as a merchant
@@ -75,8 +73,7 @@ impl SettlementContract {
     /// * [`Paused`](SettlementError::Paused) — if the contract is currently paused.
     /// * [`MerchantMissing`](SettlementError::MerchantMissing) — if the merchant is not currently registered.
     pub fn unregister_merchant(env: Env, signers: Vec<Address>, merchant: Address) {
-        assert_not_paused(&env);
-        verify_admin_auth(&env, &signers, read_threshold(&env));
+        assert_admin_and_not_paused(&env, &signers);
         let admin = signers.get(0).unwrap();
 
         let key = DataKey::Merchant(merchant.clone());

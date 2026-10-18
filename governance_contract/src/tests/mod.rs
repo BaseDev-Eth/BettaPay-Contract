@@ -1492,3 +1492,40 @@ fn other_system_params_are_not_restricted_to_boolean_values() {
     client.update_system_param(&admins, &key, &1440);
     assert_eq!(client.get_system_param(&key), Some(1440));
 }
+
+#[test]
+#[should_panic(expected = "Error(Contract, #5)")]
+fn paused_with_bad_auth_yields_paused_over_unauthorized() {
+    let (env, client, admins, _recovery) = setup();
+    client.pause(&admins);
+    assert!(client.is_paused());
+
+    let non_admin = Address::generate(&env);
+    let cfg = FeeConfig {
+        platform_fee_bps: 120,
+        network_fee_bps: 35,
+    };
+    // Must fail with Paused (#5) rather than Unauthorized (#3)
+    client.set_fee_config(&soroban_sdk::vec![&env, non_admin], &cfg);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #6)")]
+fn upsert_anchor_rejects_zero_address_asset() {
+    let (env, client, admins, _recovery) = setup();
+    let zero = Address::from_string(&soroban_sdk::String::from_str(
+        &env,
+        "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+    ));
+    let anchor = Address::generate(&env);
+    client.upsert_anchor(&admins, &zero, &anchor);
+}
+
+#[test]
+fn upsert_anchor_accepts_valid_address() {
+    let (env, client, admins, _recovery) = setup();
+    let asset = Address::generate(&env);
+    let anchor = Address::generate(&env);
+    client.upsert_anchor(&admins, &asset, &anchor);
+    assert_eq!(client.get_anchor(&asset), Some(anchor));
+}

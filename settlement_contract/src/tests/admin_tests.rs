@@ -1535,3 +1535,35 @@ fn migrate_rejected_while_paused() {
     client.pause(&admins);
     client.migrate(&admins);
 }
+
+#[test]
+#[should_panic(expected = "Error(Contract, #5)")]
+fn paused_with_bad_auth_yields_paused_over_unauthorized() {
+    let (env, client, admins, _merchant) = setup();
+    client.pause(&admins);
+    assert!(client.is_paused());
+
+    let non_admin = Address::generate(&env);
+    let merchant = Address::generate(&env);
+    // When paused, register_merchant with non-admin signers must yield Paused (#5), not Unauthorized (#3)
+    client.register_merchant(&soroban_sdk::vec![&env, non_admin], &merchant);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #306)")]
+fn register_merchant_rejects_zero_address() {
+    let (env, client, admins, _merchant) = setup();
+    let zero_address = Address::from_string(&soroban_sdk::String::from_str(
+        &env,
+        "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+    ));
+    client.register_merchant(&admins, &zero_address);
+}
+
+#[test]
+fn register_merchant_accepts_valid_address() {
+    let (env, client, admins, merchant) = setup();
+    assert!(!client.is_merchant_registered(&merchant));
+    client.register_merchant(&admins, &merchant);
+    assert!(client.is_merchant_registered(&merchant));
+}
