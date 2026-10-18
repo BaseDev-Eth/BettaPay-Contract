@@ -762,7 +762,7 @@ fn settlement_rule_exceeding_governance_ceiling_is_rejected() {
         &gov_id,
         &recovery,
     );
-    client.register_merchant(&soroban_sdk::vec![&env, admin], &merchant);
+    client.register_merchant(&soroban_sdk::vec![&env, admin.clone()], &merchant);
 
     // Rule exceeding the governance ceiling (200 > 100 platform).
     let over_ceiling_rule = SettlementRule {

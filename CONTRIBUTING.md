@@ -11,10 +11,10 @@ Thank you for contributing to the BettaPay Soroban smart contracts. This guide c
 - [Optional: Pre-Commit Hook](#optional-pre-commit-hook)
 - [Upgrades and Storage Migrations](DEVELOPMENT.md)
 - [Testing](#testing)
-- [Contract limits and storage semantics](docs/contract-limits.md)
-- [Archive and tombstone semantics](docs/archive-and-tombstones.md)
-- [Test snapshot workflow](docs/test-snapshots.md)
-- [Wasm size budget](docs/wasm-size.md)
+- [Coverage](#coverage)
+- [Dependency auditing](#dependency-auditing)
+- [Deployment initialization order](DEPLOYMENT.md)
+- [Fee rounding guarantees](FEE_ROUNDING.md)
 - [Building WASM Binaries](#building-wasm-binaries)
 - [Optional: Soroban CLI Scripts](#optional-soroban-cli-scripts)
 - [Code Ownership and Review Process](#code-ownership-and-review-process)
@@ -212,7 +212,7 @@ Contributors can optionally configure a local pre-commit hook to catch formattin
 
 The hook automatically runs:
 - `cargo fmt --all --check`
-- `make clippy` (or `cargo clippy --workspace --lib --all-features`)
+- `make clippy` (or `cargo clippy --workspace --all-targets --all-features -- -D warnings`)
 
 The hook is scoped to only run when staged changes include Rust source files (`.rs`), ensuring non-Rust commits (such as documentation or configuration updates) remain fast and unblocked.
 
@@ -250,6 +250,12 @@ Contract logic is tested with Soroban's in-memory `Env` in each crate's `#[cfg(t
 ```bash
 cargo build --target wasm32-unknown-unknown --release
 cargo test --workspace
+```
+
+Or invoke the Makefile test target, which runs all workspace tests across `settlement_contract`, `governance_contract`, and `bettapay_common` in both debug and release modes:
+
+```bash
+make test
 ```
 
 ### Run tests for a single contract
@@ -317,6 +323,43 @@ editing either file:
 bash scripts/tests/security_docs_test.sh
 ```
 
+## Coverage
+
+The `Workspace coverage` job in `.github/workflows/tests.yml` runs the test
+suite across the Cargo workspace with `cargo-llvm-cov` and uploads an LCOV
+report and text summary as the `workspace-coverage` workflow artifact. Coverage
+is reported in the GitHub Actions run summary as a reviewable baseline figure,
+but is not gated by a minimum percentage.
+
+Install `cargo-llvm-cov` and the Rust LLVM tools, then measure coverage locally:
+
+```bash
+rustup component add llvm-tools-preview
+cargo install cargo-llvm-cov --locked
+make coverage
+```
+
+The LCOV report is written to `target/coverage/lcov.info`, which is ignored
+with the rest of `target/`.
+
+## Dependency auditing
+
+`deny.toml` defines the workspace's advisory, license, banned-dependency, and
+source policies. CI runs `cargo deny check` for pull requests alongside
+`cargo audit`; an advisory or license-policy failure blocks the CI check.
+
+To reproduce the check locally:
+
+```bash
+cargo install cargo-deny --locked
+cargo deny check
+```
+
+When adding a dependency, run `cargo deny check`. If it introduces a new
+license, verify the dependency's license terms and add the SPDX identifier to
+the `[licenses].allow` list in `deny.toml` only after review. Do not suppress
+an advisory or broaden allowed sources as a workaround for a failed check.
+
 ## Building WASM Binaries
 
 Optimized WASM artifacts are required for deployment:
@@ -354,6 +397,10 @@ Deploys both contracts, initializes admin, and writes contract IDs to `.soroban/
 bash scripts/deploy_testnet.sh
 ```
 
+Both scripts initialize settlement before governance. See
+[DEPLOYMENT.md](DEPLOYMENT.md) for the required order, one-shot initialization,
+and partial-deployment recovery behavior.
+
 Environment variables (all optional, with defaults for testnet):
 
 | Variable | Default |
@@ -364,6 +411,8 @@ Environment variables (all optional, with defaults for testnet):
 | `SOROBAN_SOURCE` | `bettapay-sim` (simulate script) |
 
 Never commit Soroban identity keys or `.soroban/` directory contents.
+Fee split rounding and clamp behavior are documented in
+[FEE_ROUNDING.md](FEE_ROUNDING.md).
 
 ## Code Ownership and Review Process
 

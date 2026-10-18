@@ -4,14 +4,15 @@ use bettapay_common::{constants::BPS_DENOMINATOR, events};
 
 use crate::errors::SettlementError;
 use crate::policy::{
-    BOOTSTRAP_DEFAULT_RULE, MAX_PAYMENTS_BATCH, PAYMENT_TTL_BUMP, PAYMENT_TTL_THRESHOLD,
+    BOOTSTRAP_DEFAULT_RULE, MAX_PAYMENTS_BATCH, MAX_PAYMENT_REFERENCE_LEN, PAYMENT_TTL_BUMP,
+    PAYMENT_TTL_THRESHOLD,
 };
 use crate::storage::{
     assert_not_paused, assert_payments_readable, is_merchant_registered_and_bump_ttl,
     is_merchant_registered_internal, read_min_payment_amount, read_rule_or_default,
     read_rule_or_default_no_bump, read_threshold, verify_admin_auth,
 };
-use crate::types::{Bps, DataKey, FeeSplit, PaymentRecord, SettlementRule};
+use crate::types::{Bps, DataKey, FeeSplit, PaymentRecord, PaymentsPage, SettlementRule};
 use crate::{SettlementContract, SettlementContractClient};
 
 /// Computes the platform, network, and merchant fee amounts for an amount using ceil-based rounding.
@@ -157,6 +158,7 @@ mod tests {
     }
 
     #[test]
+    // See FEE_ROUNDING.md for the documented ceil direction and per-leg bound.
     fn calculate_fee_ceil_matches_expected_values() {
         for (amount, bps, expected) in [
             (1i128, 1u32, 1i128),
@@ -216,6 +218,7 @@ mod tests {
     }
 
     #[test]
+    // See FEE_ROUNDING.md for the network clamp and non-negative merchant rule.
     fn tiny_amount_with_full_fees_clamps_network_and_merchant_to_zero() {
         let env = Env::default();
         let split = calculate_split(&env, 1, &rule(5_000, 5_000));
@@ -360,6 +363,8 @@ fn assert_read_authorized(env: &Env, merchant: &Address, signers: &Vec<Address>)
 impl SettlementContract {
     /// Store a payment reference for a merchant and calculate the fee split.
     ///
+    /// `reference` is fixed at [`MAX_PAYMENT_REFERENCE_LEN`] bytes (`BytesN<32>`).
+    ///
     /// # Panics
     ///
     /// * [`Paused`](SettlementError::Paused) — if the contract is paused.
@@ -388,7 +393,7 @@ impl SettlementContract {
         // Validate cheap, non-storage input first (issue #774): an all-zero
         // reference is always invalid, so reject it before any storage reads
         // (merchant lookup) or auth checks to avoid wasting gas on invalid input.
-        if reference == BytesN::from_array(&env, &[0; 32]) {
+        if reference == BytesN::from_array(&env, &[0; MAX_PAYMENT_REFERENCE_LEN as usize]) {
             panic_with_error!(&env, SettlementError::InvalidPaymentReference);
         }
         assert_not_paused(&env);
@@ -620,10 +625,22 @@ impl SettlementContract {
     ///    fetch the corresponding `PaymentRecord`s.
     ///
     /// References are resolved within the merchant's own namespace and the
-    /// returned vector contains only records that exist.
+    /// returned page's `records` contains only references that exist.
     /// Pass an empty `signers` vector to authorize as the merchant, or a
     /// non-empty vector of admin signers to authorize through the configured
     /// admin threshold.
+    ///
+    /// ## Pagination (issue #982)
+    ///
+    /// Soroban cannot enumerate storage keys, so pagination is driven by the
+    /// caller's own `refs` vector rather than server-side merchant state:
+    /// `cursor` is an opaque position the caller echoes back on the next
+    /// call, and the cap is enforced on `refs` itself, exactly as before.
+    /// `PaymentsPage::next_cursor` is `Some(cursor + refs.len())` whenever
+    /// this call's `refs` filled a full page (length == `MAX_PAYMENTS_BATCH`,
+    /// signalling the caller's own reference set may extend further), and
+    /// `None` once a shorter page confirms there is nothing left to resolve.
+    /// Pass `cursor = 0` for a single, non-paginated call.
     ///
     /// # Panics
     ///
@@ -641,8 +658,9 @@ impl SettlementContract {
         env: Env,
         merchant: Address,
         refs: Vec<BytesN<32>>,
+        cursor: u32,
         signers: Vec<Address>,
-    ) -> Vec<PaymentRecord> {
+    ) -> PaymentsPage {
         assert_read_authorized(&env, &merchant, &signers);
         assert_payments_readable(&env, &merchant);
         if refs.len() > MAX_PAYMENTS_BATCH {
@@ -666,7 +684,17 @@ impl SettlementContract {
                 records.push(payment);
             }
         }
-        Vec::from_slice(&env, &records)
+
+        let next_cursor = if refs.len() == MAX_PAYMENTS_BATCH {
+            Some(cursor + refs.len())
+        } else {
+            None
+        };
+
+        PaymentsPage {
+            records: Vec::from_slice(&env, &records),
+            next_cursor,
+        }
     }
 }
 

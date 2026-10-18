@@ -29,6 +29,11 @@ pub const FALLBACK_SETTLEMENT_DELAY_LEDGER: u32 = 17280;
 /// pruned (`prune_payments`) in a single batch call
 pub const MAX_PAYMENTS_BATCH: u32 = 100;
 
+/// Fixed byte length of a payment reference (`BytesN<32>`), named so callers
+/// and docs have a canonical value instead of a bare `32`. Enforced
+/// structurally by the `BytesN<32>` type, not by a runtime check.
+pub const MAX_PAYMENT_REFERENCE_LEN: u32 = 32;
+
 /// Maximum number of payment records that may be stored per merchant.
 ///
 /// Rationale: payment entries live in persistent storage (`DataKey::Payment`)

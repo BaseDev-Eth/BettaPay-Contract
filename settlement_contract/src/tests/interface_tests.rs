@@ -13,6 +13,7 @@
 
 use crate::*;
 use soroban_sdk::testutils::Address as _;
+use soroban_sdk::testutils::Ledger as _;
 use soroban_sdk::{Address, BytesN, Env};
 
 use super::{register_governance, setup};
@@ -26,11 +27,11 @@ fn stranger_cannot_batch_read_payments() {
     client.store_payment_reference(&merchant, &reference, &1_000);
     let refs = soroban_sdk::vec![&env, reference];
 
-    let authorized_records = client.get_payments(&merchant, &refs, &soroban_sdk::vec![&env]);
-    assert_eq!(authorized_records.len(), 1);
+    let authorized_page = client.get_payments(&merchant, &refs, &0, &soroban_sdk::vec![&env]);
+    assert_eq!(authorized_page.records.len(), 1);
 
     env.set_auths(&[]);
-    let stranger_result = client.try_get_payments(&merchant, &refs, &soroban_sdk::vec![&env]);
+    let stranger_result = client.try_get_payments(&merchant, &refs, &0, &soroban_sdk::vec![&env]);
     assert!(
         stranger_result.is_err(),
         "an unauthenticated batch read must return an error, not an empty result"

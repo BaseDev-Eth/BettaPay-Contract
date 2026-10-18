@@ -219,7 +219,7 @@ fn governance_rejects_zero_address_admin_transfer() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #204)")]
+#[should_panic(expected = "Error(Contract, #18)")]
 fn rejects_same_admin_transfer() {
     let (_env, client, admins, _recovery) = setup();
     let threshold = client.get_threshold();

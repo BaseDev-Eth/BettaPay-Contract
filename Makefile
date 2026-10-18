@@ -31,9 +31,12 @@ clean:
 
 # Operator tooling targets that need runtime arguments accept a $(ARGS)
 # passthrough, e.g.: make verify_wasm_hash ARGS=--contract-id CAA...
-.PHONY: check_interface_parity verify_wasm_hash export_events list_pending_ops
+.PHONY: check_interface_parity verify_wasm_hash export_events list_pending_ops check_storage_docs
 check_interface_parity:
 	@bash scripts/check_interface_parity.sh
+
+check_storage_docs:
+	@bash scripts/check_storage_docs.sh
 
 verify_wasm_hash:
 	@bash scripts/verify_wasm_hash.sh $(ARGS)
@@ -44,20 +47,20 @@ export_events:
 list_pending_ops:
 	@bash scripts/list_pending_ops.sh $(ARGS)
 
-.PHONY: fmt test check clippy print_msrv msrv doc check_docs check_snapshots test_scripts wasm_size check_codeowners all
+.PHONY: fmt test check clippy print_msrv msrv doc coverage check_snapshots test_scripts wasm_size check_codeowners all
 
 fmt:
 	cargo fmt --all --check
 
 test:
-	cargo test -p governance_contract -p bettapay_common
-	cargo test -p governance_contract -p bettapay_common --release
+	cargo test --workspace
+	cargo test --workspace --release
 
 check:
 	cargo check --workspace
 
 clippy:
-	cargo clippy --workspace --lib --all-features
+	cargo clippy --workspace --all-targets --all-features -- -D warnings
 
 print_msrv:
 	@echo $(MSRV)
@@ -70,8 +73,9 @@ doc:
 	RUSTDOCFLAGS="-D warnings -A rustdoc::private_intra_doc_links" \
 		cargo doc --workspace --no-deps --document-private-items
 
-check_docs:
-	bash scripts/check_documented_constants.sh
+coverage:
+	@mkdir -p target/coverage
+	cargo llvm-cov --workspace --lcov --output-path target/coverage/lcov.info
 
 check_snapshots:
 	bash scripts/check_test_snapshots.sh
@@ -79,6 +83,7 @@ check_snapshots:
 test_scripts:
 	bash scripts/tests/tooling_smoke_test.sh
 	bash scripts/tests/codeowners_check_test.sh
+	bash scripts/tests/storage_docs_test.sh
 
 wasm_size: optimize
 	bash scripts/check_wasm_size.sh
@@ -86,4 +91,4 @@ wasm_size: optimize
 check_codeowners:
 	bash scripts/check_codeowners.sh
 
-all: fmt check clippy test check_docs check_snapshots test_scripts check_codeowners check_interface_parity
+all: fmt check clippy test check_snapshots test_scripts check_codeowners check_interface_parity check_storage_docs
