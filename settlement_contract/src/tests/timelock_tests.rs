@@ -347,6 +347,44 @@ fn execute_rejects_when_contract_is_paused_and_preserves_scheduled_op() {
     assert!(client.is_merchant_registered(&merchant));
 }
 
+/// Issue #995: pins the documented pause behavior for the timelocked queue.
+/// `schedule`, `execute` and `cancel` are all rejected with `Paused` while the
+/// contract is paused, a queued operation survives untouched, and the direct
+/// incident-response path (`initiate_recovery`, `unpause`) stays available.
+#[test]
+fn paused_timelock_operations_are_rejected_and_queue_survives() {
+    let (env, client, admins, merchant) = setup();
+    let queued = Operation::RegisterMerchant(merchant.clone());
+    let other = Operation::UnregisterMerchant(merchant.clone());
+
+    client.schedule(&admins, &queued, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS);
+
+    client.pause(&admins);
+
+    assert_eq!(
+        client.try_schedule(&admins, &other, &DEFAULT_TIMELOCK_DELAY_SECONDS),
+        Err(Ok(SettlementError::Paused))
+    );
+    assert_eq!(
+        client.try_execute(&admins.get(0).unwrap(), &queued),
+        Err(Ok(SettlementError::Paused))
+    );
+    assert_eq!(
+        client.try_cancel(&admins, &queued),
+        Err(Ok(SettlementError::Paused))
+    );
+
+    // Incident-response entry points are not gated by pause.
+    client.initiate_recovery(&Address::generate(&env));
+
+    // The queue was not consumed or altered: after unpausing, the original
+    // entry is still there to be cancelled.
+    client.unpause(&admins);
+    client.cancel(&admins, &queued);
+}
+
 // ---------------------------------------------------------------------------
 // Governance update validation on the scheduled path (issue #562)
 // ---------------------------------------------------------------------------

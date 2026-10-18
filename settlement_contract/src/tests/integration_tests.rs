@@ -111,7 +111,7 @@ fn settlement_falls_back_to_bootstrap_without_governance_fee_config() {
     // Bootstrap default is 100 bps platform, 5 network — fee = 105, merchant = 9895.
     assert_eq!(split.platform_fee_amount, 100);
     assert_eq!(split.network_fee_amount, 5);
-    assert_eq!(split.merchant_amount, 9_895);
+    assert_eq!(split.merchant_payout_amount, 9_895);
 }
 
 // ---------------------------------------------------------------------------
@@ -133,7 +133,7 @@ fn governance_fee_config_propagates_via_effective_settlement_rule() {
     let split = settle_client.calculate_fee_split(&merchant, &10_000);
     assert_eq!(split.platform_fee_amount, 250, "250 bps of 10_000");
     assert_eq!(split.network_fee_amount, 50, "50 bps of 10_000");
-    assert_eq!(split.merchant_amount, 9_700);
+    assert_eq!(split.merchant_payout_amount, 9_700);
 
     let stored = gov_client.get_fee_config().unwrap();
     assert_eq!(stored.platform_fee_bps, 250);
@@ -288,7 +288,7 @@ fn stored_payment_record_uses_propagated_governance_fees_when_no_explicit_rule()
 
     assert_eq!(split.platform_fee_amount, 200);
     assert_eq!(split.network_fee_amount, 100);
-    assert_eq!(split.merchant_amount, 9_700);
+    assert_eq!(split.merchant_payout_amount, 9_700);
 
     let record = settle_client
         .get_payment_reference(&merchant, &payment_ref, &soroban_sdk::vec![&env])
@@ -296,7 +296,7 @@ fn stored_payment_record_uses_propagated_governance_fees_when_no_explicit_rule()
     assert_eq!(record.amount, amount);
     assert_eq!(record.platform_fee_amount, 200);
     assert_eq!(record.network_fee_amount, 100);
-    assert_eq!(record.merchant_amount, 9_700);
+    assert_eq!(record.merchant_payout_amount, 9_700);
     assert_eq!(record.platform_fee_bps, 200);
     assert_eq!(record.network_fee_bps, 100);
 }
@@ -694,7 +694,7 @@ fn full_lifecycle_configure_governance_then_process_payments() {
         );
         assert_eq!(rec.network_fee_amount, network, "payment {idx} network fee");
         assert_eq!(
-            rec.merchant_amount, merchant_net,
+            rec.merchant_payout_amount, merchant_net,
             "payment {idx} merchant net"
         );
     };
@@ -750,7 +750,7 @@ fn store_payment_reference_accepts_amount_at_min() {
 
     assert_eq!(split.gross_amount, MIN_PAYMENT_AMOUNT);
     assert_eq!(
-        split.platform_fee_amount + split.network_fee_amount + split.merchant_amount,
+        split.platform_fee_amount + split.network_fee_amount + split.merchant_payout_amount,
         split.gross_amount,
         "fee legs plus merchant amount must reconstruct the gross amount"
     );
@@ -758,7 +758,7 @@ fn store_payment_reference_accepts_amount_at_min() {
     // each fee leg rounds up to 1 unit.
     assert_eq!(split.platform_fee_amount, 1);
     assert_eq!(split.network_fee_amount, 1);
-    assert_eq!(split.merchant_amount, 98);
+    assert_eq!(split.merchant_payout_amount, 98);
 }
 
 // ---------------------------------------------------------------------------
@@ -793,7 +793,7 @@ proptest! {
         prop_assert_eq!(split.gross_amount, amount);
         prop_assert_eq!(split.platform_fee_amount, platform);
         prop_assert_eq!(split.network_fee_amount, network);
-        prop_assert_eq!(split.merchant_amount, (amount - platform - network).max(0));
+        prop_assert_eq!(split.merchant_payout_amount, (amount - platform - network).max(0));
         let _ = (env, gov_admins);
     }
 }
@@ -962,7 +962,7 @@ fn get_payment_reference_owner_read_works() {
         .expect("owner read must succeed");
     assert_eq!(record.merchant, merchant);
     assert_eq!(record.amount, 10_000);
-    assert_eq!(record.merchant_amount, split.merchant_amount);
+    assert_eq!(record.merchant_payout_amount, split.merchant_payout_amount);
 
     // Batch read for the owner works too.
     let missing_reference = BytesN::<32>::from_array(&env, &[23u8; 32]);
@@ -1552,7 +1552,7 @@ fn payments_survive_broken_governance_with_cached_config() {
     let split = settle_client.store_payment_reference(&merchant, &reference, &amount);
     assert_eq!(split.platform_fee_amount, 250);
     assert_eq!(split.network_fee_amount, 50);
-    assert_eq!(split.merchant_amount, 9_700);
+    assert_eq!(split.merchant_payout_amount, 9_700);
 
     let panicking_gov = env.register_contract(None, PanickingGovernance);
     env.as_contract(&settle_id, || {
@@ -1572,7 +1572,7 @@ fn payments_survive_broken_governance_with_cached_config() {
         split2.network_fee_amount, 50,
         "payment must survive governance trap by using cached config"
     );
-    assert_eq!(split2.merchant_amount, 9_700);
+    assert_eq!(split2.merchant_payout_amount, 9_700);
 
     let record = settle_client
         .get_payment_reference(&merchant, &reference2, &soroban_sdk::vec![&env])
@@ -1627,12 +1627,12 @@ fn end_to_end_payment_lifecycle_asserts_event_order() {
         expected_network, split.network_fee_amount
     );
     assert_eq!(
-        split.merchant_amount, expected_merchant,
+        split.merchant_payout_amount, expected_merchant,
         "merchant amount mismatch: expected {}, got {}",
-        expected_merchant, split.merchant_amount
+        expected_merchant, split.merchant_payout_amount
     );
     assert_eq!(
-        split.platform_fee_amount + split.network_fee_amount + split.merchant_amount,
+        split.platform_fee_amount + split.network_fee_amount + split.merchant_payout_amount,
         split.gross_amount,
         "fee legs plus merchant amount must reconstruct the gross amount"
     );
@@ -1645,7 +1645,7 @@ fn end_to_end_payment_lifecycle_asserts_event_order() {
     assert_eq!(record.merchant, merchant);
     assert_eq!(record.platform_fee_amount, split.platform_fee_amount);
     assert_eq!(record.network_fee_amount, split.network_fee_amount);
-    assert_eq!(record.merchant_amount, split.merchant_amount);
+    assert_eq!(record.merchant_payout_amount, split.merchant_payout_amount);
     assert_eq!(record.platform_fee_bps, rule.platform_fee_bps);
     assert_eq!(record.network_fee_bps, rule.network_fee_bps);
     assert_eq!(record.settlement_delay_ledger, rule.settlement_delay_ledger);
@@ -1666,7 +1666,7 @@ fn end_to_end_payment_lifecycle_asserts_event_order() {
             assert_eq!(payload.merchant, merchant);
             assert_eq!(payload.platform_fee_amount, split.platform_fee_amount);
             assert_eq!(payload.network_fee_amount, split.network_fee_amount);
-            assert_eq!(payload.merchant_amount, split.merchant_amount);
+            assert_eq!(payload.merchant_payout_amount, split.merchant_payout_amount);
             payment_stored_found = true;
             break;
         }
@@ -1707,4 +1707,66 @@ fn end_to_end_payment_lifecycle_asserts_event_order() {
         rule_idx.unwrap() < pay_idx.unwrap(),
         "settlement_rule_updated must precede payment_stored"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Issue #970: Integration test deploying both contracts together
+// ---------------------------------------------------------------------------
+
+/// Deploy both governance and settlement contracts in one Env, initialize
+/// both with settlement pointing to governance, set a governance FeeConfig,
+/// set a settlement rule, register a merchant, store a payment, read it back,
+/// and assert the fee split matches the governance-bounded rule.
+#[test]
+fn both_contracts_deployed_together_enforce_governance_fees_on_payment() {
+    let (env, gov_client, gov_admins, settle_client, settle_admins, merchant) = setup_both();
+
+    // 1. Governance publishes a fee config (protocol-wide ceiling).
+    let gov_config = GovFeeConfig {
+        platform_fee_bps: 200,
+        network_fee_bps: 80,
+    };
+    gov_client.set_fee_config(&gov_admins, &gov_config);
+
+    // 2. Settlement sets a merchant-specific rule (under governance ceiling).
+    settle_client.register_merchant(&settle_admins, &merchant);
+    let settlement_rule = SettlementRule {
+        platform_fee_bps: 150,
+        network_fee_bps: 50,
+        settlement_delay_ledger: 10,
+        auto_settle: true,
+    };
+    settle_client.set_settlement_rule(&settle_admins, &merchant, &settlement_rule);
+
+    // 3. Store a payment reference.
+    let reference = BytesN::<32>::from_array(&env, &[99u8; 32]);
+    let amount: i128 = 10_000;
+    let split = settle_client.store_payment_reference(&merchant, &reference, &amount);
+
+    // 4. Read the payment back.
+    let record = settle_client
+        .get_payment_reference(&merchant, &reference, &soroban_sdk::vec![&env])
+        .expect("payment must be readable");
+
+    // 5. Assert the fee split matches the settlement rule (within governance bounds).
+    assert_eq!(record.amount, amount);
+    assert_eq!(record.merchant, merchant);
+    assert_eq!(record.platform_fee_bps, settlement_rule.platform_fee_bps);
+    assert_eq!(record.network_fee_bps, settlement_rule.network_fee_bps);
+
+    let expected_platform = (amount * settlement_rule.platform_fee_bps as i128 + 10_000 - 1) / 10_000;
+    let expected_network = (amount * settlement_rule.network_fee_bps as i128 + 10_000 - 1) / 10_000;
+    let expected_merchant = (amount - expected_platform - expected_network).max(0);
+
+    assert_eq!(split.platform_fee_amount, expected_platform);
+    assert_eq!(split.network_fee_amount, expected_network);
+    assert_eq!(split.merchant_payout_amount, expected_merchant);
+
+    assert_eq!(record.platform_fee_amount, split.platform_fee_amount);
+    assert_eq!(record.network_fee_amount, split.network_fee_amount);
+    assert_eq!(record.merchant_payout_amount, split.merchant_payout_amount);
+
+    // Both rules are stored for later reference.
+    assert_eq!(gov_client.get_fee_config().unwrap().platform_fee_bps, 200);
+    assert_eq!(settle_client.get_settlement_rule(&merchant).unwrap().platform_fee_bps, 150);
 }

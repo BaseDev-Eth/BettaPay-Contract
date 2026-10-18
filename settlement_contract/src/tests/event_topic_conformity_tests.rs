@@ -362,7 +362,7 @@ fn bootstrap_fallback_resolves_without_emitting_event() {
     assert_eq!(split.gross_amount, amount);
     assert_eq!(split.platform_fee_amount, expected_platform);
     assert_eq!(split.network_fee_amount, expected_network);
-    assert_eq!(split.merchant_amount, expected_merchant);
+    assert_eq!(split.merchant_payout_amount, expected_merchant);
 }
 
 /// Regression test for issue #485: read-only rule resolution must NOT

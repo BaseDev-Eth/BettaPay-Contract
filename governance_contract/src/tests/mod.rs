@@ -1137,6 +1137,34 @@ fn init_writes_schema_version_marker_and_migrate_is_idempotent() {
     );
 }
 
+/// Issue #984: version-bump simulation. A stored `SchemaVersion` below
+/// `CURRENT_SCHEMA_VERSION` (as after an upgrade that bumped the constant) is
+/// advanced by `migrate`, and a second call is then a no-op.
+#[test]
+fn migrate_advances_schema_version_below_current() {
+    let (env, client, admins, _recovery) = setup();
+    let read_version = || {
+        env.as_contract(&client.address, || {
+            env.storage()
+                .instance()
+                .get::<_, u32>(&DataKey::SchemaVersion)
+        })
+    };
+
+    env.as_contract(&client.address, || {
+        env.storage()
+            .instance()
+            .set(&DataKey::SchemaVersion, &(CURRENT_SCHEMA_VERSION - 1));
+    });
+    assert_eq!(read_version(), Some(CURRENT_SCHEMA_VERSION - 1));
+
+    client.migrate(&admins);
+    assert_eq!(read_version(), Some(CURRENT_SCHEMA_VERSION));
+
+    client.migrate(&admins);
+    assert_eq!(read_version(), Some(CURRENT_SCHEMA_VERSION));
+}
+
 #[test]
 #[should_panic(expected = "Error(Contract, #5)")]
 fn migrate_is_blocked_while_paused() {

@@ -138,6 +138,11 @@
 //!    struct — the old type is what keeps those entries readable.
 //! 4. Order is: upgrade the Wasm, then call `migrate`, then verify the
 //!    post-upgrade state, then remove the migration code in a later upgrade.
+//!    `migrate` is admin-gated, rejected while paused, and idempotent: at
+//!    `CURRENT_SCHEMA_VERSION` it is a no-op, and below it, it runs the
+//!    `migrate_step` hook once per version crossed and advances the stored
+//!    `SchemaVersion`. A real conversion bumps `CURRENT_SCHEMA_VERSION` and adds
+//!    its step to that hook; `governance_contract` has the same hook.
 //! 5. `Payment(Address, BytesN<32>)`, `Merchant(Address)` and `Rule(Address)`
 //!    are keyed by value and Soroban cannot enumerate storage keys — which is
 //!    why [`SettlementContract::get_payments`] takes the merchant and the
@@ -163,7 +168,18 @@
 //! - `transfer_admin` — rotate compromised keys
 //! - `initiate_recovery` / `cancel_recovery` / `execute_recovery` — the
 //!   admin-recovery flow itself must keep working while paused
-//! - `schedule` / `execute` / `cancel` — scheduled operations must proceed
+//!
+//! The timelocked queue is the opposite: `schedule`, `execute` and `cancel`
+//! all call `assert_not_paused` and are **rejected with
+//! [`SettlementError::Paused`] while the contract is paused**. A queued
+//! operation is not lost by this: it stays in storage untouched and can be
+//! executed or cancelled once the contract is unpaused. The rationale is that
+//! the timelock is a deferred, planned path, whereas an incident is handled
+//! through the direct admin operations listed above (plus `unpause`), which
+//! stay available. Freezing the queue also stops a previously scheduled
+//! operation from firing in the middle of an incident; recovery additionally
+//! vetoes the queue (see `initiate_recovery`). Pinned by
+//! `paused_timelock_operations_are_rejected_and_queue_survives`.
 //!
 //! `pause`/`unpause` themselves are guarded to be idempotent, mirroring
 //! governance: pausing while already paused panics with `AlreadyPaused`, and
@@ -201,7 +217,8 @@
 //! | `transfer_admin` / `change_threshold` | fail-closed | Requires valid admin multisig authorization |
 //! | `pause` / `unpause` | fail-closed | Requires valid admin multisig authorization |
 //! | `upgrade` | fail-closed | Requires valid admin multisig authorization and interface check |
-//! | `schedule` / `execute` / `cancel` | fail-closed | Requires valid admin multisig authorization and timelock |
+//! | `schedule` | fail-closed GovernanceCallFailed | Probes governance `get_fee_config` before writing; an unreachable governance reverts with `SettlementError::GovernanceCallFailed` and writes nothing (issue #994) |
+//! | `schedule` / `execute` / `cancel` | fail-closed | Requires valid admin multisig authorization and timelock (`schedule`/`cancel`); also rejected with `Paused` while the contract is paused |
 //!
 //! ## Event Convention
 //!

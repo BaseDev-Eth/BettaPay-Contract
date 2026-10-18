@@ -130,7 +130,7 @@ fn read_path_governance_trap_falls_back_to_bootstrap() {
     let split = client.calculate_fee_split(&merchant, &10_000);
     assert_eq!(split.platform_fee_amount, 100);
     assert_eq!(split.network_fee_amount, 5);
-    assert_eq!(split.merchant_amount, 9_895);
+    assert_eq!(split.merchant_payout_amount, 9_895);
 }
 
 /// Same as above but governance returns a *typed error* rather than trapping,
@@ -164,7 +164,7 @@ fn read_path_governance_typed_error_falls_back_to_bootstrap() {
     let split = client.calculate_fee_split(&merchant, &10_000);
     assert_eq!(split.platform_fee_amount, 100);
     assert_eq!(split.network_fee_amount, 5);
-    assert_eq!(split.merchant_amount, 9_895);
+    assert_eq!(split.merchant_payout_amount, 9_895);
 }
 
 /// When governance returns `None` (no config set), the read path should fall
@@ -195,7 +195,7 @@ fn read_path_governance_none_falls_through_to_bootstrap() {
     let split = client.calculate_fee_split(&merchant, &10_000);
     assert_eq!(split.platform_fee_amount, 100);
     assert_eq!(split.network_fee_amount, 5);
-    assert_eq!(split.merchant_amount, 9_895);
+    assert_eq!(split.merchant_payout_amount, 9_895);
 }
 
 // ---------------------------------------------------------------------------
@@ -470,7 +470,7 @@ fn read_path_governance_valid_config_used() {
     let split = client.calculate_fee_split(&merchant, &10_000);
     assert_eq!(split.platform_fee_amount, 250);
     assert_eq!(split.network_fee_amount, 50);
-    assert_eq!(split.merchant_amount, 9_700);
+    assert_eq!(split.merchant_payout_amount, 9_700);
 }
 
 /// Verifies that when governance has no config set (`Ok(Ok(None))`), the
@@ -518,7 +518,7 @@ fn read_path_governance_none_falls_back_to_bootstrap_defaults() {
     assert_eq!(split.gross_amount, amount);
     assert_eq!(split.platform_fee_amount, expected_platform);
     assert_eq!(split.network_fee_amount, expected_network);
-    assert_eq!(split.merchant_amount, expected_merchant);
+    assert_eq!(split.merchant_payout_amount, expected_merchant);
 
     // No BOOTSTRAP_FALLBACK_EVENT on the hot path (issue #691).
     let events = env.events().all();
@@ -537,7 +537,7 @@ fn read_path_governance_none_falls_back_to_bootstrap_defaults() {
     let split = client.calculate_fee_split(&merchant, &10_000);
     assert_eq!(split.platform_fee_amount, 100);
     assert_eq!(split.network_fee_amount, 5);
-    assert_eq!(split.merchant_amount, 9_895);
+    assert_eq!(split.merchant_payout_amount, 9_895);
 }
 
 // ---------------------------------------------------------------------------
@@ -632,7 +632,7 @@ fn bypass_gov_fees_one_uses_bootstrap_instead_of_governance_config() {
     let split = client.calculate_fee_split(&merchant, &10_000);
     assert_eq!(split.platform_fee_amount, 100);
     assert_eq!(split.network_fee_amount, 5);
-    assert_eq!(split.merchant_amount, 9_895);
+    assert_eq!(split.merchant_payout_amount, 9_895);
 }
 
 #[test]
@@ -644,7 +644,7 @@ fn bypass_gov_fees_zero_keeps_governance_config() {
     let split = client.calculate_fee_split(&merchant, &10_000);
     assert_eq!(split.platform_fee_amount, 250);
     assert_eq!(split.network_fee_amount, 50);
-    assert_eq!(split.merchant_amount, 9_700);
+    assert_eq!(split.merchant_payout_amount, 9_700);
 }
 
 #[test]
@@ -822,8 +822,55 @@ fn settlement_read_path_falls_back_to_bootstrap_default_rule() {
     assert_eq!(split.gross_amount, amount);
     assert_eq!(split.platform_fee_amount, expected_platform);
     assert_eq!(split.network_fee_amount, expected_network);
-    assert_eq!(split.merchant_amount, expected_merchant);
+    assert_eq!(split.merchant_payout_amount, expected_merchant);
     assert_eq!(split.platform_fee_amount, 100);
     assert_eq!(split.network_fee_amount, 5);
-    assert_eq!(split.merchant_amount, 9_895);
+    assert_eq!(split.merchant_payout_amount, 9_895);
+}
+
+// ---------------------------------------------------------------------------
+// Scheduling liveness precheck (issue #994)
+// ---------------------------------------------------------------------------
+
+/// With an unreachable governance, `schedule` fails with the typed
+/// `GovernanceCallFailed` error and writes no `ScheduledOperation` entry.
+#[test]
+fn schedule_rejects_unreachable_governance_without_writing_storage() {
+    use soroban_sdk::xdr::ToXdr;
+
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let admins = soroban_sdk::vec![&env, admin];
+    let merchant = Address::generate(&env);
+    let contract_id = env.register_contract(None, SettlementContract);
+    let client = SettlementContractClient::new(&env, &contract_id);
+    client.init(
+        &Address::generate(&env),
+        &admins,
+        &1,
+        &super::register_governance(&env),
+        &Address::generate(&env),
+    );
+
+    let operation = Operation::RegisterMerchant(merchant);
+    let key =
+        DataKey::ScheduledOperation(env.crypto().sha256(&operation.clone().to_xdr(&env)).into());
+
+    // Reachable governance: scheduling succeeds and the entry is written.
+    client.schedule(&admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+    assert!(env.as_contract(&contract_id, || env.storage().persistent().has(&key)));
+    client.cancel(&admins, &operation);
+    assert!(!env.as_contract(&contract_id, || env.storage().persistent().has(&key)));
+
+    // Unreachable governance: typed error, nothing written.
+    let panicking_gov = env.register_contract(None, PanickingGovernance);
+    inject_governance(&env, &contract_id, &panicking_gov);
+
+    assert_eq!(
+        client.try_schedule(&admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS),
+        Err(Ok(SettlementError::GovernanceCallFailed))
+    );
+    assert!(!env.as_contract(&contract_id, || env.storage().persistent().has(&key)));
 }

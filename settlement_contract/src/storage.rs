@@ -482,6 +482,20 @@ fn invoke_governance_get_fee_config(env: &Env, governance: &Address) -> Val {
     }
 }
 
+/// Cheap governance reachability probe used before accepting a scheduled
+/// operation (issue #994).
+///
+/// Makes exactly one bounded `get_fee_config` call and discards the result: only
+/// whether governance answers matters, not what it returns, so a missing or
+/// unusual fee config does not fail the probe. A trap, typed error or host
+/// error is mapped to [`SettlementError::GovernanceCallFailed`]. It reads the
+/// governance address and writes nothing; callers run it before any write so a
+/// failure leaves storage untouched.
+pub(crate) fn assert_governance_reachable(env: &Env) {
+    let governance = read_governance(env);
+    invoke_governance_get_fee_config(env, &governance);
+}
+
 /// Classifies the raw `get_fee_config` value without panicking, so the shape
 /// rules can be exercised directly (see the proptest at the bottom of this
 /// file). [`try_read_governance_fee_config`] is the panicking wrapper used by

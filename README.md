@@ -496,6 +496,7 @@ pub struct PaymentRecord {
 | `calculate_fee_split`| `merchant: Address`, `amount: i128` | `FeeSplit` | None | `MerchantMissing`, `InvalidAmount` | Performs a dry-run calculation of fees for the merchant without mutating storage. |
 | `get_payment_reference`| `merchant: Address`, `reference: BytesN<32>` | `Option<PaymentRecord>` | None | None | Returns the merchant's logged payment record for the reference. Refreshes the entry's TTL when queried. |
 | `get_payments` | `merchant: Address`, `references: Vec<BytesN<32>>` | `Vec<PaymentRecord>` | None | None | Batch retrieves the merchant's logged payment records. Missing references are ignored. |
+| `prune_payments` | `merchant: Address`, `references: Vec<BytesN<32>>` | `u32` | Stored Admin | `BatchTooLarge` | Removes up to 100 of one merchant's payment records in one call. Missing or repeated references are skipped, so cleanup can be retried. Emits one `payments_pruned` event with the removed count. |
 
 ---
 

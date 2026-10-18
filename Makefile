@@ -47,7 +47,7 @@ export_events:
 list_pending_ops:
 	@bash scripts/list_pending_ops.sh $(ARGS)
 
-.PHONY: fmt test check clippy print_msrv msrv doc check_snapshots test_scripts wasm_size check_codeowners all
+.PHONY: fmt test check clippy print_msrv msrv doc coverage check_snapshots test_scripts wasm_size check_codeowners all
 
 fmt:
 	cargo fmt --all --check
@@ -72,6 +72,10 @@ msrv:
 doc:
 	RUSTDOCFLAGS="-D warnings -A rustdoc::private_intra_doc_links" \
 		cargo doc --workspace --no-deps --document-private-items
+
+coverage:
+	@mkdir -p target/coverage
+	cargo llvm-cov --workspace --lcov --output-path target/coverage/lcov.info
 
 check_snapshots:
 	bash scripts/check_test_snapshots.sh

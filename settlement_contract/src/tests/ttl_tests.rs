@@ -328,7 +328,7 @@ fn calculate_fee_split_is_ttl_neutral_for_the_merchant_rule() {
         "network fee must be unchanged by the TTL-neutral read (issue #760)"
     );
     assert_eq!(
-        split_after.merchant_amount, split_before.merchant_amount,
+        split_after.merchant_payout_amount, split_before.merchant_payout_amount,
         "merchant amount must be unchanged by the TTL-neutral read (issue #760)"
     );
 
