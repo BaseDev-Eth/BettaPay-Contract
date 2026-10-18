@@ -170,10 +170,17 @@ pub fn emit_admin_transferred(env: &Env, payload: &AdminTransferred) {
 /// Emits the `paused` event.
 ///
 /// Topics: `(Symbol("paused"),)`
-/// Data:    `(admin_address, true)`
-pub fn emit_paused(env: &Env, admin: &Address) {
-    env.events()
-        .publish((Symbol::new(env, PAUSED_EVENT),), (admin.clone(), true));
+/// Data:    `(admin_address, true, reason)`
+///
+/// `reason` is a bounded numeric code (issue #991) — see
+/// [`crate::constants::MAX_PAUSE_REASON`] — carrying the machine-readable
+/// cause of the pause for incident forensics. Callers that don't expose a
+/// reason to their own callers pass [`crate::constants::PAUSE_REASON_NONE`].
+pub fn emit_paused(env: &Env, admin: &Address, reason: u32) {
+    env.events().publish(
+        (Symbol::new(env, PAUSED_EVENT),),
+        (admin.clone(), true, reason),
+    );
 }
 
 /// Emits the `unpaused` event.

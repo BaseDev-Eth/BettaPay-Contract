@@ -90,9 +90,15 @@ pub fn set_paused(env: &Env, paused: bool) {
 /// BettaPay contract. Callers are still responsible for verifying admin
 /// auth and checking idempotency (via [`is_paused`]) before calling this,
 /// since those checks produce contract-specific errors that cannot live here.
-pub fn apply_pause(env: &Env, admin: &Address) {
+///
+/// `reason` is a bounded numeric code (issue #991) threaded through to
+/// [`crate::events::emit_paused`]. Callers must validate it against
+/// [`crate::constants::MAX_PAUSE_REASON`] themselves (with their own typed
+/// error) before calling this — out-of-range rejection cannot live here for
+/// the same reason the admin-auth/idempotency checks can't.
+pub fn apply_pause(env: &Env, admin: &Address, reason: u32) {
     set_paused(env, true);
-    crate::events::emit_paused(env, admin);
+    crate::events::emit_paused(env, admin, reason);
 }
 
 /// Atomically clears the pause flag and emits the canonical `unpaused` event.

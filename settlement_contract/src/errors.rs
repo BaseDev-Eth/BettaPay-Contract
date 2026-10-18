@@ -91,6 +91,15 @@ pub enum SettlementError {
     /// instead of an untyped panic if that invariant is ever violated.
     AdminSetEmpty = 317,
     SameAdmin = 18,
+    /// `schedule()` was called with an operation whose encoded XDR payload
+    /// exceeds `MAX_SCHEDULED_OPERATION_PAYLOAD_LEN` (issue #993).
+    PayloadTooLarge = 318,
+    /// `schedule()` was called with an `execute_in` delay exceeding
+    /// `MAX_TIMELOCK_DELAY_SECONDS` (issue #992).
+    ExecutionDelayTooLong = 319,
+    /// `pause()` was called with a reason code above
+    /// `bettapay_common::constants::MAX_PAUSE_REASON` (issue #991).
+    InvalidPauseReason = 320,
 }
 
 const _: () = {
@@ -139,4 +148,7 @@ const _: () = {
     assert!(SettlementError::PaymentOrphaned as u32 >= error_codes::SETTLEMENT_RANGE_START);
     assert!(SettlementError::OperationHashCollision as u32 >= error_codes::SETTLEMENT_RANGE_START);
     assert!(SettlementError::AdminSetEmpty as u32 >= error_codes::SETTLEMENT_RANGE_START);
+    assert!(SettlementError::PayloadTooLarge as u32 >= error_codes::SETTLEMENT_RANGE_START);
+    assert!(SettlementError::ExecutionDelayTooLong as u32 >= error_codes::SETTLEMENT_RANGE_START);
+    assert!(SettlementError::InvalidPauseReason as u32 >= error_codes::SETTLEMENT_RANGE_START);
 };

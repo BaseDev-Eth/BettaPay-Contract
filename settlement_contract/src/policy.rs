@@ -77,6 +77,35 @@ pub const DEFAULT_TIMELOCK_DELAY_SECONDS: u64 = 7 * 24 * 60 * 60;
 /// operation can execute.
 pub const MIN_TIMELOCK_DELAY_SECONDS: u64 = DEFAULT_TIMELOCK_DELAY_SECONDS;
 
+/// Maximum enforceable delay for any scheduled administrative operation
+/// (issue #992).
+///
+/// `schedule()` rejects any `execute_in` above this ceiling with
+/// [`SettlementError::ExecutionDelayTooLong`](crate::errors::SettlementError::ExecutionDelayTooLong).
+/// Without a cap, `execute_in` could be set arbitrarily far into the future,
+/// effectively locking a queue slot forever and confusing operators. The
+/// ceiling is deliberately derived from [`SCHEDULED_OP_TTL_BUMP`] (the
+/// persistent entry's TTL bump, expressed in ledgers) rather than a separate
+/// literal, so the maximum delay can never exceed the window the scheduled
+/// entry is actually kept alive — if the TTL policy changes, this ceiling
+/// moves with it instead of silently drifting out of sync.
+pub const MAX_TIMELOCK_DELAY_SECONDS: u64 =
+    (SCHEDULED_OP_TTL_BUMP / LEDGERS_PER_DAY) as u64 * 24 * 60 * 60;
+
+/// Maximum encoded size, in bytes, of a scheduled [`Operation`](crate::types::Operation)'s
+/// XDR payload (issue #993).
+///
+/// `schedule()` measures `operation.to_xdr(&env).len()` against this cap
+/// before writing anything to persistent storage, rejecting an oversized
+/// payload with [`SettlementError::PayloadTooLarge`](crate::errors::SettlementError::PayloadTooLarge).
+/// Without a bound, a variant that carries an unbounded collection — e.g.
+/// `Operation::TransferAdmin`'s admin `Vec<Address>` — could be scheduled
+/// arbitrarily large, bloating persistent storage under the operation hash
+/// with no upper bound. 4096 bytes comfortably covers every legitimate
+/// operation (every `Operation` variant today encodes to well under 1 KiB
+/// for realistic admin-set sizes) while still bounding worst-case growth.
+pub const MAX_SCHEDULED_OPERATION_PAYLOAD_LEN: u32 = 4096;
+
 /// The single interface version advertised by `supports_interface`.
 ///
 /// `upgrade` probes the incoming Wasm with `supports_interface(SUPPORTED_INTERFACE_VERSION)`
