@@ -945,6 +945,18 @@ fn stranger_cannot_read_payment_records_or_bump_ttl() {
         ),
         "a non-admin signer must be rejected with Unauthorized"
     );
+
+    // The same stranger-as-admin signer set is rejected with the identical
+    // Unauthorized code on the batch read entry point (issue #981).
+    assert!(
+        matches!(
+            settle_client.try_get_payments(&merchant, &refs, &0, &invalid_admins),
+            Err(Ok(e)) if e == soroban_sdk::Error::from_contract_error(
+                SettlementError::Unauthorized as u32
+            )
+        ),
+        "a non-admin signer must be rejected with Unauthorized on get_payments"
+    );
 }
 
 /// The merchant who owns the records can always read them back.
