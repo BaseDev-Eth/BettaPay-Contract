@@ -1,10 +1,16 @@
 //! Regression coverage for the settlement administrative timelock.
 
-use crate::{Operation, SettlementContractClient, SettlementError, SettlementRule, DEFAULT_TIMELOCK_DELAY_SECONDS, MIN_TIMELOCK_DELAY_SECONDS};
+use crate::types::{DataKey, ScheduledOp};
+use crate::{
+    Operation, SettlementContractClient, SettlementError, SettlementRule,
+    DEFAULT_TIMELOCK_DELAY_SECONDS, MAX_TIMELOCK_DELAY_SECONDS, MIN_TIMELOCK_DELAY_SECONDS,
+};
 use bettapay_common::constants::RECOVERY_DELAY_SECONDS;
+use bettapay_common::events;
 use bettapay_common::events::AdminTransferred;
 use soroban_sdk::testutils::{Address as _, Events, Ledger};
-use soroban_sdk::{Address, Env, TryFromVal};
+use soroban_sdk::xdr::ToXdr;
+use soroban_sdk::{Address, BytesN, Env, FromVal, Symbol, TryFromVal};
 
 use super::setup;
 
@@ -795,15 +801,134 @@ fn schedule_below_floor_is_rejected() {
     assert!(!client.is_merchant_registered(&merchant));
 }
 
-/// `schedule` with `execute_in` equal to zero panics with
-/// `ExecutionNotReady` (#10).
+/// Returns the `ScheduledOperation` storage key for `operation`.
+fn scheduled_op_key(env: &Env, operation: &Operation) -> DataKey {
+    let op_hash: BytesN<32> = env.crypto().sha256(&operation.clone().to_xdr(env)).into();
+    DataKey::ScheduledOperation(op_hash)
+}
+
+/// Reads the stored `ScheduledOp` for `operation`, if any.
+fn read_scheduled_op(
+    env: &Env,
+    client: &SettlementContractClient,
+    operation: &Operation,
+) -> Option<ScheduledOp> {
+    let key = scheduled_op_key(env, operation);
+    env.as_contract(&client.address, || env.storage().persistent().get(&key))
+}
+
+/// Returns how many `op_scheduled` events the last invocation emitted.
+fn op_scheduled_event_count(env: &Env) -> u32 {
+    let topic = Symbol::new(env, events::OP_SCHEDULED_EVENT);
+    let mut count = 0;
+    for (_contract, topics, _data) in env.events().all().iter() {
+        if !topics.is_empty() && Symbol::from_val(env, &topics.get(0).unwrap()) == topic {
+            count += 1;
+        }
+    }
+    count
+}
+
+/// Issue #893: a zero delay would collapse the timelock entirely. `schedule`
+/// must reject it with the typed `ExecutionNotReady` error, write no
+/// `ScheduledOperation` entry, and emit no `op_scheduled` event. The minimal
+/// valid delay (the floor) still schedules and emits `op_scheduled`.
 #[test]
-#[should_panic(expected = "Error(Contract, #10)")]
 fn schedule_with_zero_delay_is_rejected() {
-    let (_env, client, admins, merchant) = setup();
+    let (env, client, admins, merchant) = setup();
     let operation = Operation::RegisterMerchant(merchant);
 
-    client.schedule(&admins, &operation, &0);
+    let result = client.try_schedule(&admins, &operation, &0);
+    assert_eq!(
+        result,
+        Err(Ok(SettlementError::ExecutionNotReady.into())),
+        "a zero delay must return ExecutionNotReady"
+    );
+    assert!(
+        read_scheduled_op(&env, &client, &operation).is_none(),
+        "no ScheduledOperation entry may exist after a rejected zero delay"
+    );
+    assert_eq!(
+        op_scheduled_event_count(&env),
+        0,
+        "no op_scheduled event may be emitted on a rejected zero delay"
+    );
+
+    let now = env.ledger().timestamp();
+    client.schedule(&admins, &operation, &MIN_TIMELOCK_DELAY_SECONDS);
+    assert_eq!(op_scheduled_event_count(&env), 1);
+    assert_eq!(
+        read_scheduled_op(&env, &client, &operation)
+            .expect("the minimal valid delay must schedule")
+            .execute_at,
+        now + MIN_TIMELOCK_DELAY_SECONDS
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Issue #894: schedule delay overflow
+// ---------------------------------------------------------------------------
+
+/// A realistic, non-zero ledger timestamp for the overflow tests.
+const OVERFLOW_TEST_TIMESTAMP: u64 = 1_700_000_000;
+
+/// `execute_at` is computed as `timestamp + execute_in`. A delay near
+/// `u64::MAX` would wrap that sum (or trap on overflow) — the
+/// `MAX_TIMELOCK_DELAY_SECONDS` bound must reject it first with the typed
+/// `ExecutionDelayTooLong` error, leaving no queue entry and no event.
+#[test]
+fn schedule_rejects_overflowing_delay_with_typed_error() {
+    let (env, client, admins, merchant) = setup();
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp = OVERFLOW_TEST_TIMESTAMP);
+    let operation = Operation::RegisterMerchant(merchant);
+
+    for execute_in in [
+        u64::MAX,
+        u64::MAX - OVERFLOW_TEST_TIMESTAMP + 1,
+        MAX_TIMELOCK_DELAY_SECONDS + 1,
+    ] {
+        let result = client.try_schedule(&admins, &operation, &execute_in);
+        assert_eq!(
+            result,
+            Err(Ok(SettlementError::ExecutionDelayTooLong.into())),
+            "execute_in {execute_in} must be rejected by the max-delay bound, not wrap or panic"
+        );
+        assert!(read_scheduled_op(&env, &client, &operation).is_none());
+        assert_eq!(op_scheduled_event_count(&env), 0);
+    }
+
+    // Without the bound, the two largest delays above would overflow.
+    assert!(OVERFLOW_TEST_TIMESTAMP.checked_add(u64::MAX).is_none());
+    assert!(OVERFLOW_TEST_TIMESTAMP
+        .checked_add(u64::MAX - OVERFLOW_TEST_TIMESTAMP + 1)
+        .is_none());
+}
+
+/// The largest valid delay (`MAX_TIMELOCK_DELAY_SECONDS`) schedules and
+/// stores an exact `execute_at` that is strictly after the current
+/// timestamp, matching the `op_scheduled` event payload.
+#[test]
+fn schedule_accepts_max_delay_with_exact_execute_at() {
+    let (env, client, admins, merchant) = setup();
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp = OVERFLOW_TEST_TIMESTAMP);
+    let operation = Operation::RegisterMerchant(merchant);
+
+    client.schedule(&admins, &operation, &MAX_TIMELOCK_DELAY_SECONDS);
+
+    let expected = OVERFLOW_TEST_TIMESTAMP + MAX_TIMELOCK_DELAY_SECONDS;
+    let stored = read_scheduled_op(&env, &client, &operation)
+        .expect("the maximum valid delay must schedule");
+    assert_eq!(stored.execute_at, expected);
+    assert!(
+        stored.execute_at > OVERFLOW_TEST_TIMESTAMP,
+        "execute_at must not wrap below the current timestamp"
+    );
+
+    let (_contract, _topics, data) = env.events().all().last().unwrap();
+    let (_caller, event_execute_at): (Address, u64) = <(Address, u64)>::from_val(&env, &data);
+    assert_eq!(event_execute_at, expected);
 }
 
 // ---------------------------------------------------------------------------

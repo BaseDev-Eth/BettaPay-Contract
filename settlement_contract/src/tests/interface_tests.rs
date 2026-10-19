@@ -301,3 +301,157 @@ fn fee_ceiling_parity_direct_vs_timelocked() {
         res_timelocked.unwrap_err().unwrap()
     );
 }
+
+// ---------------------------------------------------------------------------
+// Issue #891: direct coverage of the upgrade interface probe
+// ---------------------------------------------------------------------------
+
+/// Uploads the release build of this contract — a Wasm that exports
+/// `supports_interface(SUPPORTED_INTERFACE_VERSION) == true`.
+fn upload_conforming_wasm(env: &Env) -> BytesN<32> {
+    env.deployer()
+        .upload_contract_wasm(soroban_sdk::Bytes::from_slice(
+            env,
+            include_bytes!(
+                "../../../target/wasm32-unknown-unknown/release/settlement_contract.wasm"
+            ),
+        ))
+}
+
+/// Uploads an empty Wasm — it deploys, but has no `supports_interface`
+/// export, so the probe reports it as non-conforming.
+fn upload_non_conforming_wasm(env: &Env) -> BytesN<32> {
+    env.deployer()
+        .upload_contract_wasm(soroban_sdk::Bytes::from_slice(env, &[]))
+}
+
+/// Returns how many `contract_upgraded` events the last invocation emitted.
+fn contract_upgraded_event_count(env: &Env) -> u32 {
+    use soroban_sdk::testutils::Events as _;
+    use soroban_sdk::FromVal;
+
+    let topic = soroban_sdk::Symbol::new(env, bettapay_common::events::CONTRACT_UPGRADED_EVENT);
+    let mut count = 0;
+    for (_contract, topics, _data) in env.events().all().iter() {
+        if !topics.is_empty()
+            && soroban_sdk::Symbol::from_val(env, &topics.get(0).unwrap()) == topic
+        {
+            count += 1;
+        }
+    }
+    count
+}
+
+/// Asserts the most recent event is `contract_upgraded` carrying
+/// `expected_hash` as its second topic and `expected_admin` as its data.
+fn assert_last_event_is_contract_upgraded(
+    env: &Env,
+    expected_hash: &BytesN<32>,
+    expected_admin: &Address,
+) {
+    use soroban_sdk::testutils::Events as _;
+    use soroban_sdk::FromVal;
+
+    let (_contract, topics, data) = env.events().all().last().unwrap();
+    assert_eq!(
+        soroban_sdk::Symbol::from_val(env, &topics.get(0).unwrap()),
+        soroban_sdk::Symbol::new(env, bettapay_common::events::CONTRACT_UPGRADED_EVENT),
+        "a successful upgrade must emit contract_upgraded"
+    );
+    assert_eq!(
+        BytesN::<32>::from_val(env, &topics.get(1).unwrap()),
+        *expected_hash,
+        "contract_upgraded must carry the new wasm hash as its second topic"
+    );
+    assert_eq!(
+        Address::from_val(env, &data),
+        *expected_admin,
+        "contract_upgraded must carry the upgrading admin as its data"
+    );
+}
+
+/// A Wasm whose `supports_interface(1)` returns `true` passes the probe, is
+/// swapped in, and emits `contract_upgraded`. The upgraded contract keeps
+/// its storage and still answers calls.
+#[test]
+fn upgrade_probe_accepts_conforming_wasm_and_emits_contract_upgraded() {
+    let (env, client, admins, _merchant) = setup();
+    let good_hash = upload_conforming_wasm(&env);
+
+    let result = client.try_upgrade(&admins, &good_hash);
+    assert!(result.is_ok(), "a conforming wasm must be accepted");
+    assert_last_event_is_contract_upgraded(&env, &good_hash, &admins.get(0).unwrap());
+    assert_eq!(contract_upgraded_event_count(&env), 1);
+
+    // The swapped-in Wasm runs against the same storage.
+    assert_eq!(client.get_admin(), admins);
+    assert!(client.supports_interface(&SUPPORTED_INTERFACE_VERSION));
+}
+
+/// A Wasm that deploys but lacks `supports_interface` is rejected with the
+/// typed `InvalidWasmInterface` contract error — not a host panic — and no
+/// `contract_upgraded` event is emitted.
+#[test]
+fn upgrade_probe_rejects_non_conforming_wasm_with_typed_error() {
+    let (env, client, admins, _merchant) = setup();
+    let bad_hash = upload_non_conforming_wasm(&env);
+
+    let result = client.try_upgrade(&admins, &bad_hash);
+    assert_eq!(
+        result,
+        Err(Ok(SettlementError::InvalidWasmInterface.into())),
+        "a non-conforming wasm must be rejected with the typed InvalidWasmInterface error"
+    );
+    assert_eq!(
+        contract_upgraded_event_count(&env),
+        0,
+        "no contract_upgraded event may be emitted on rejection"
+    );
+}
+
+/// The probe must run before `update_current_contract_wasm`. The empty Wasm
+/// has no exports, so if the code swap had happened first every later call
+/// into the contract would fail. The contract still answering normally after
+/// the rejection proves no swap occurred.
+#[test]
+fn upgrade_probe_runs_before_code_swap() {
+    let (env, client, admins, _merchant) = setup();
+    let bad_hash = upload_non_conforming_wasm(&env);
+
+    assert!(client.try_upgrade(&admins, &bad_hash).is_err());
+
+    // Still the original code: exports are present and storage is intact.
+    assert!(client.supports_interface(&SUPPORTED_INTERFACE_VERSION));
+    assert_eq!(client.get_admin(), admins);
+    assert_eq!(client.version(), CURRENT_SCHEMA_VERSION);
+
+    // A conforming upgrade still goes through afterwards.
+    let good_hash = upload_conforming_wasm(&env);
+    client.upgrade(&admins, &good_hash);
+    assert_last_event_is_contract_upgraded(&env, &good_hash, &admins.get(0).unwrap());
+}
+
+/// `upgrade` is exempt from the pause guard: while paused, a conforming Wasm
+/// still upgrades (and the paused flag carries over), and a non-conforming
+/// Wasm is rejected by the probe with `InvalidWasmInterface`, not `Paused`.
+#[test]
+fn upgrade_probe_applies_while_paused() {
+    let (env, client, admins, _merchant) = setup();
+    client.pause(&admins, &0);
+
+    let bad_hash = upload_non_conforming_wasm(&env);
+    assert_eq!(
+        client.try_upgrade(&admins, &bad_hash),
+        Err(Ok(SettlementError::InvalidWasmInterface.into())),
+        "while paused, the probe (not the pause guard) must reject a non-conforming wasm"
+    );
+    assert_eq!(contract_upgraded_event_count(&env), 0);
+
+    let good_hash = upload_conforming_wasm(&env);
+    client.upgrade(&admins, &good_hash);
+    assert_last_event_is_contract_upgraded(&env, &good_hash, &admins.get(0).unwrap());
+    assert!(
+        client.is_paused(),
+        "the paused flag must survive the upgrade"
+    );
+}

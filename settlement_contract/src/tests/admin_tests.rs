@@ -1450,6 +1450,88 @@ fn upgrade_rejects_never_uploaded_wasm_hash() {
     client.upgrade(&admins, &garbage);
 }
 
+/// Snapshot of the settlement contract's instance and persistent storage.
+fn storage_snapshot(
+    env: &Env,
+    contract: &Address,
+) -> (
+    soroban_sdk::Map<soroban_sdk::Val, soroban_sdk::Val>,
+    soroban_sdk::Map<soroban_sdk::Val, soroban_sdk::Val>,
+) {
+    use soroban_sdk::testutils::storage::Instance as _;
+    env.as_contract(contract, || {
+        (
+            env.storage().instance().all(),
+            env.storage().persistent().all(),
+        )
+    })
+}
+
+/// Issue #892: a non-zero hash that was never uploaded looks plausible but
+/// references no code. `upgrade` must reject it cleanly before any storage
+/// write or code swap: storage is byte-for-byte unchanged, no
+/// `contract_upgraded` event is emitted, and the running contract still
+/// answers calls. A valid (uploaded, conforming) hash is still accepted.
+///
+/// The rejection surfaces as the host's `Storage`/`MissingValue` error, not
+/// `InvalidWasmInterface`: protocol 21 gives contract code no way to test
+/// whether a Wasm hash exists, so the probe deployment traps first (see
+/// `upgrade_rejects_never_uploaded_wasm_hash` and
+/// `bettapay_common::upgrade::probe_supports_interface`).
+#[test]
+fn upgrade_rejects_non_zero_never_uploaded_hash_without_side_effects() {
+    let (env, client, admins, merchant) = setup();
+    client.register_merchant(&admins, &merchant);
+
+    let garbage = soroban_sdk::BytesN::from_array(&env, &[0x5Au8; 32]);
+    assert_ne!(
+        garbage,
+        soroban_sdk::BytesN::from_array(&env, &[0u8; 32]),
+        "the hash under test must be non-zero"
+    );
+
+    let storage_before = storage_snapshot(&env, &client.address);
+
+    let result = client.try_upgrade(&admins, &garbage);
+    assert!(
+        result.is_err(),
+        "a never-uploaded hash must be rejected before any write"
+    );
+    let upgraded_topic = Symbol::new(&env, bettapay_common::events::CONTRACT_UPGRADED_EVENT);
+    for (_contract, topics, _data) in env.events().all().iter() {
+        assert!(
+            topics.is_empty() || Symbol::from_val(&env, &topics.get(0).unwrap()) != upgraded_topic,
+            "no contract_upgraded event may be emitted on rejection"
+        );
+    }
+
+    assert_eq!(
+        storage_snapshot(&env, &client.address),
+        storage_before,
+        "contract storage must be unchanged after a rejected upgrade"
+    );
+    // The running wasm is untouched: the original code still serves calls.
+    assert_eq!(client.get_admin(), admins);
+    assert!(client.is_merchant_registered(&merchant));
+    assert!(client.supports_interface(&SUPPORTED_INTERFACE_VERSION));
+
+    // A valid uploaded hash is accepted.
+    let good_hash = env
+        .deployer()
+        .upload_contract_wasm(soroban_sdk::Bytes::from_slice(
+            &env,
+            include_bytes!(
+                "../../../target/wasm32-unknown-unknown/release/settlement_contract.wasm"
+            ),
+        ));
+    client.upgrade(&admins, &good_hash);
+    let (_contract, topics, _data) = env.events().all().last().unwrap();
+    assert_eq!(
+        Symbol::from_val(&env, &topics.get(0).unwrap()),
+        upgraded_topic
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Issue #704: SchemaVersion baseline + migrate skeleton
 // ---------------------------------------------------------------------------
