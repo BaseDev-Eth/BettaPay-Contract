@@ -1794,3 +1794,87 @@ fn both_contracts_deployed_together_enforce_governance_fees_on_payment() {
     assert_eq!(gov_client.get_fee_config().unwrap().platform_fee_bps, 200);
     assert_eq!(settle_client.get_settlement_rule(&merchant).unwrap().platform_fee_bps, 150);
 }
+
+// ---------------------------------------------------------------------------
+// Issue #896: get_payments ordering is positional
+// ---------------------------------------------------------------------------
+
+/// `get_payments` resolves refs in the exact order the caller passed them:
+/// `records[i]` corresponds to the i-th *existing* ref, regardless of the
+/// order the payments were stored in. Refs with no stored record are omitted
+/// (no placeholder), so indexers can map results back to their input by
+/// walking `refs` and skipping the ones they know are missing. The
+/// `MAX_PAYMENTS_BATCH` cap still applies to the input length.
+#[test]
+fn get_payments_returns_records_in_input_ref_order() {
+    let (env, _gov, _gov_admins, settle_client, settle_admins, merchant) = setup_both();
+    settle_client.register_merchant(&settle_admins, &merchant);
+    let no_signers = soroban_sdk::vec![&env];
+
+    let r1 = BytesN::<32>::from_array(&env, &[1u8; 32]);
+    let r2 = BytesN::<32>::from_array(&env, &[2u8; 32]);
+    let r3 = BytesN::<32>::from_array(&env, &[3u8; 32]);
+    let r4 = BytesN::<32>::from_array(&env, &[4u8; 32]);
+    let missing_a = BytesN::<32>::from_array(&env, &[0xA0u8; 32]);
+    let missing_b = BytesN::<32>::from_array(&env, &[0xB0u8; 32]);
+
+    // Distinct amounts identify each record. Store in ascending ref order.
+    settle_client.store_payment_reference(&merchant, &r1, &1_000);
+    settle_client.store_payment_reference(&merchant, &r2, &2_000);
+    settle_client.store_payment_reference(&merchant, &r3, &3_000);
+    settle_client.store_payment_reference(&merchant, &r4, &4_000);
+
+    let amounts = |page: &PaymentsPage| -> alloc::vec::Vec<i128> {
+        page.records.iter().map(|rec| rec.amount).collect()
+    };
+
+    // A non-sorted input order is reflected verbatim in the output.
+    let refs = soroban_sdk::vec![&env, r3.clone(), r1.clone(), r4.clone(), r2.clone()];
+    let page = settle_client.get_payments(&merchant, &refs, &0, &no_signers);
+    assert_eq!(amounts(&page), [3_000, 1_000, 4_000, 2_000]);
+    for rec in page.records.iter() {
+        assert_eq!(rec.merchant, merchant);
+    }
+
+    // Reversing the input reverses the output: ordering is positional, not
+    // storage or insertion order.
+    let refs = soroban_sdk::vec![&env, r2.clone(), r4.clone(), r1.clone(), r3.clone()];
+    let page = settle_client.get_payments(&merchant, &refs, &0, &no_signers);
+    assert_eq!(amounts(&page), [2_000, 4_000, 1_000, 3_000]);
+
+    // Mixed existing and missing refs: missing ones are dropped and the
+    // surviving records keep their relative input order.
+    let refs = soroban_sdk::vec![
+        &env,
+        missing_a.clone(),
+        r4.clone(),
+        missing_b.clone(),
+        r1.clone(),
+        r3.clone(),
+        missing_a.clone(),
+    ];
+    let page = settle_client.get_payments(&merchant, &refs, &0, &no_signers);
+    assert_eq!(amounts(&page), [4_000, 1_000, 3_000]);
+    assert_eq!(page.next_cursor, None);
+
+    // Omission is consistent: the same mixed input yields the same output.
+    let again = settle_client.get_payments(&merchant, &refs, &0, &no_signers);
+    assert_eq!(amounts(&again), amounts(&page));
+
+    // An all-missing input yields an empty page rather than an error.
+    let refs = soroban_sdk::vec![&env, missing_a, missing_b];
+    let page = settle_client.get_payments(&merchant, &refs, &0, &no_signers);
+    assert_eq!(page.records.len(), 0);
+
+    // The batch cap still rejects oversized requests.
+    let mut oversized = Vec::new(&env);
+    for _ in 0..=MAX_PAYMENTS_BATCH {
+        oversized.push_back(r1.clone());
+    }
+    assert_eq!(
+        settle_client
+            .try_get_payments(&merchant, &oversized, &0, &no_signers)
+            .err(),
+        Some(Ok(SettlementError::BatchTooLarge.into()))
+    );
+}
