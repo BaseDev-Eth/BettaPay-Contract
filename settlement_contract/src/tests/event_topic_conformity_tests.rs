@@ -508,3 +508,84 @@ fn clear_settlement_rule_emits_only_one_event() {
         Symbol::new(&env, events::SETTLEMENT_RULE_CLEARED_EVENT)
     );
 }
+
+// ---------------------------------------------------------------------------
+// Issue #902: bootstrap_fallback fires only when resolution reaches bootstrap
+// ---------------------------------------------------------------------------
+
+/// Counts every `bootstrap_fallback` event recorded so far in `env.events()`.
+fn bootstrap_fallback_count(env: &Env) -> u32 {
+    let events = env.events().all();
+    let topic = Symbol::new(env, events::BOOTSTRAP_FALLBACK_EVENT);
+    let mut count = 0;
+    for i in 0..events.len() {
+        let (_contract, topics, _data) = events.get(i).unwrap();
+        if !topics.is_empty() && Symbol::from_val(env, &topics.get(0).unwrap()) == topic {
+            count += 1;
+        }
+    }
+    count
+}
+
+/// The `bootstrap_fallback` event signals an unconfigured deployment, so the
+/// payment hot path must emit it only when resolution truly reaches
+/// `BOOTSTRAP_DEFAULT_RULE`: never under a merchant or default rule, never on
+/// the read-only `calculate_fee_split`, and never as a side effect of setting
+/// or clearing a rule (issue #689).
+#[test]
+fn bootstrap_fallback_emitted_only_when_resolution_reaches_bootstrap() {
+    // `setup()` wires a governance stub with no fee config, so nothing but
+    // bootstrap is configured.
+    let (env, client, admins, merchant) = setup();
+    client.register_merchant(&admins, &merchant);
+    let reference = |byte: u8| BytesN::<32>::from_array(&env, &[byte; 32]);
+    // The event log accumulates across calls, so each step asserts how many
+    // events its own call added.
+    let mut seen = 0;
+    let mut assert_emitted = |expected: u32, step: &str| {
+        let total = bootstrap_fallback_count(&env);
+        assert_eq!(total - seen, expected, "{step}");
+        seen = total;
+    };
+
+    // Nothing configured: the read-only path stays silent...
+    client.calculate_fee_split(&merchant, &10_000);
+    assert_emitted(0, "calculate_fee_split");
+
+    // ...while the payment path emits exactly one event.
+    client.store_payment_reference(&merchant, &reference(1), &10_000);
+    assert_emitted(1, "store_payment_reference, no rule");
+
+    // Setting and clearing a merchant rule while bootstrap is the fallback.
+    let merchant_rule = SettlementRule {
+        platform_fee_bps: 150,
+        network_fee_bps: 20,
+        settlement_delay_ledger: 3,
+        auto_settle: false,
+    };
+    client.set_settlement_rule(&admins, &merchant, &merchant_rule);
+    assert_emitted(0, "set_settlement_rule");
+
+    // Merchant rule resolves: no event.
+    client.store_payment_reference(&merchant, &reference(2), &10_000);
+    assert_emitted(0, "store_payment_reference, merchant rule");
+    client.calculate_fee_split(&merchant, &10_000);
+    assert_emitted(0, "calculate_fee_split, merchant rule");
+
+    client.clear_settlement_rule(&admins, &merchant);
+    assert_emitted(0, "clear_settlement_rule");
+
+    // Default rule resolves: no event.
+    let default_rule = SettlementRule {
+        platform_fee_bps: 200,
+        network_fee_bps: 30,
+        settlement_delay_ledger: 7,
+        auto_settle: true,
+    };
+    client.set_default_rule(&admins, &default_rule);
+    assert_emitted(0, "set_default_rule");
+    client.store_payment_reference(&merchant, &reference(3), &10_000);
+    assert_emitted(0, "store_payment_reference, default rule");
+    client.calculate_fee_split(&merchant, &10_000);
+    assert_emitted(0, "calculate_fee_split, default rule");
+}
