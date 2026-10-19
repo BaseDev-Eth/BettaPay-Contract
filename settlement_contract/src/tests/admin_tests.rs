@@ -337,7 +337,6 @@ fn rejects_same_admin_transfer() {
 #[test]
 fn emits_event_on_admin_transfer() {
     let (env, client, admins, _merchant) = setup();
-    let old_admin = admins.get(0).unwrap();
     let new_admin = Address::generate(&env);
 
     let before = env.events().all().len();
@@ -361,8 +360,8 @@ fn emits_event_on_admin_transfer() {
     );
 
     let payload: AdminTransferred = AdminTransferred::try_from_val(&env, &data).unwrap();
-    assert_eq!(payload.old_admin, old_admin);
-    assert_eq!(payload.new_admin, new_admin);
+    assert_eq!(payload.old_admins, admins);
+    assert_eq!(payload.new_admins, soroban_sdk::vec![&env, new_admin]);
 }
 
 // ---------------------------------------------------------------------------

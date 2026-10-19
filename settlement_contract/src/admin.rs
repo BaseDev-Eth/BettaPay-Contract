@@ -21,7 +21,7 @@ use crate::policy::{
 use crate::storage::{
     assert_admin_and_not_paused, assert_governance_reachable, assert_not_paused,
     is_merchant_registered_and_bump_ttl, is_merchant_registered_internal, read_admin, read_admins,
-    read_fallback_rule, read_governance, read_optional_primary_admin, read_pending_recovery,
+    read_fallback_rule, read_governance, read_optional_admins, read_pending_recovery,
     read_recovery_address, read_rule_or_default, read_schema_version, read_threshold,
     validate_admins_and_threshold, validate_fee_against_governance, validate_governance,
     validate_nonzero_address, verify_admin_auth, write_admins,
@@ -320,7 +320,7 @@ impl SettlementContract {
             panic_with_error!(&env, SettlementError::RecoveryDelayActive);
         }
 
-        let old_admin = read_optional_primary_admin(&env);
+        let old_admins = read_optional_admins(&env);
         let new_admins = soroban_sdk::vec![&env, pending.new_admin.clone()];
         // Finalize the new admin configuration before consuming the recovery.
         // If validation or writing fails, the pending target remains available.
@@ -331,8 +331,8 @@ impl SettlementContract {
         events::emit_recovery_executed(
             &env,
             &AdminTransferred {
-                old_admin,
-                new_admin: pending.new_admin.clone(),
+                old_admins,
+                new_admins,
             },
         );
     }
@@ -352,7 +352,6 @@ impl SettlementContract {
             panic_with_error!(&env, SettlementError::SameAdmin);
         }
 
-        let old_admin = storage::primary_admin(&old_admins).unwrap();
         // Enforce admin/merchant exclusivity in both directions (issue #692).
         for i in 0..new_admins.len() {
             if is_merchant_registered_internal(&env, new_admins.get(i).unwrap()) {
@@ -360,14 +359,12 @@ impl SettlementContract {
             }
         }
 
-        let old_admin = read_admin(&env);
         write_admins(&env, &new_admins, new_threshold);
-        let primary_new_admin = new_admins.get(0).unwrap();
         events::emit_admin_transferred(
             &env,
             &AdminTransferred {
-                old_admin,
-                new_admin: primary_new_admin,
+                old_admins,
+                new_admins,
             },
         );
     }
@@ -710,6 +707,62 @@ impl SettlementContract {
         );
     }
 
+    /// Cancels a bounded batch of pending scheduled operations in one call
+    /// (issue #975): an emergency drain for an incident where a compromised
+    /// admin has queued work, without one transaction per operation.
+    ///
+    /// Soroban cannot enumerate persistent `ScheduledOperation` keys, so
+    /// callers must supply the explicit `operations` list to cancel — the
+    /// same [`Operation`] values originally passed to
+    /// [`schedule`](Self::schedule). Each entry is matched byte-for-byte
+    /// against the XDR stored under its hash, exactly like
+    /// [`cancel`](Self::cancel) (issue #570), so a hash collision cannot
+    /// remove an unrelated pending operation. An entry that is not currently
+    /// scheduled, or whose stored XDR does not match, is skipped as a no-op
+    /// so a batch cancellation can be retried safely.
+    ///
+    /// Exactly one `ops_cancelled` event is emitted per call, carrying the
+    /// executor and the number of operations actually cancelled.
+    ///
+    /// # Panics
+    ///
+    /// * [`Paused`](SettlementError::Paused) — if the contract is currently paused.
+    /// * [`Unauthorized`](SettlementError::Unauthorized) — if signers lack admin authority.
+    /// * [`BatchTooLarge`](SettlementError::BatchTooLarge) — if `operations` exceeds
+    ///   [`MAX_CANCEL_ALL_BATCH`].
+    pub fn cancel_all(env: Env, signers: Vec<Address>, operations: Vec<Operation>) -> u32 {
+        verify_admin_auth(&env, &signers, read_threshold(&env));
+        assert_not_paused(&env);
+        let caller = signers.get(0).unwrap();
+
+        if operations.len() > MAX_CANCEL_ALL_BATCH {
+            panic_with_error!(&env, SettlementError::BatchTooLarge);
+        }
+
+        let mut cancelled: u32 = 0;
+        for operation in operations.iter() {
+            let operation_xdr = operation.to_xdr(&env);
+            let op_hash: BytesN<32> = env.crypto().sha256(&operation_xdr).into();
+            let key = DataKey::ScheduledOperation(op_hash);
+
+            if let Some(scheduled) = env.storage().persistent().get::<_, ScheduledOp>(&key) {
+                // Same byte-for-byte proof as `cancel()` (issue #570): a hash
+                // match alone does not prove `operation` is what was
+                // scheduled under that slot.
+                if scheduled.operation_xdr == operation_xdr {
+                    env.storage().persistent().remove(&key);
+                    cancelled += 1;
+                }
+            }
+        }
+
+        env.events().publish(
+            (Symbol::new(&env, events::OPS_CANCELLED_EVENT),),
+            (caller, cancelled),
+        );
+        cancelled
+    }
+
     // --- Internal Admin Functions ---
 
     /// Timelocked governance update, reached via [`Operation::UpdateGovernance`]
@@ -753,7 +806,7 @@ impl SettlementContract {
         new_admins: Vec<Address>,
         new_threshold: u32,
     ) {
-        let old_admin = read_admin(env);
+        let old_admins = read_admins(env);
         validate_admins_and_threshold(env, &new_admins, new_threshold);
         // Enforce admin/merchant exclusivity in both directions (issue #692).
         for i in 0..new_admins.len() {
@@ -762,12 +815,11 @@ impl SettlementContract {
             }
         }
         write_admins(env, &new_admins, new_threshold);
-        let primary_new_admin = new_admins.get(0).unwrap();
         events::emit_admin_transferred(
             env,
             &AdminTransferred {
-                old_admin,
-                new_admin: primary_new_admin,
+                old_admins,
+                new_admins,
             },
         );
     }

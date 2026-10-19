@@ -4,18 +4,24 @@
 //! the same pair of structured payload types (`AdminTransferred`,
 //! `PendingRecovery`). Putting them here so the two contracts cannot diverge.
 
-use soroban_sdk::{contracttype, Address, Env, Symbol};
+use soroban_sdk::{contracttype, Address, Env, Symbol, Vec};
 
 use crate::types::SettlementRule;
 
 /// Structured payload emitted with the `admin_transferred` event so that
-/// off-chain consumers can read the old and new admin by field name rather
-/// than by positional order.
+/// off-chain consumers can read the old and new admin **sets** by field name
+/// rather than by positional order, and reconstruct an authorization
+/// transition without a separate storage scan (issue #977).
+///
+/// Both fields carry the full multisig admin set, not just the primary
+/// (index `0`) admin, so a threshold change that accompanies the transfer is
+/// also visible directly from the event. Field order is fixed as old then
+/// new.
 #[derive(Clone)]
 #[contracttype]
 pub struct AdminTransferred {
-    pub old_admin: Address,
-    pub new_admin: Address,
+    pub old_admins: Vec<Address>,
+    pub new_admins: Vec<Address>,
 }
 
 /// In-flight recovery operation. Lives between `initiate_recovery` and a
@@ -204,7 +210,7 @@ pub const ALL_EVENT_TOPICS: &[&str] = &[
 /// [`AdminTransferred`] payload.
 ///
 /// Topics: `(Symbol("admin_transferred"),)`
-/// Data:    `AdminTransferred { old_admin, new_admin }`
+/// Data:    `AdminTransferred { old_admins, new_admins }`
 pub fn emit_admin_transferred(env: &Env, payload: &AdminTransferred) {
     env.events().publish(
         (Symbol::new(env, ADMIN_TRANSFERRED_EVENT),),
@@ -268,7 +274,7 @@ pub fn emit_recovery_cancelled(env: &Env, canceller: &Address) {
 /// Emits the `recovery_executed` event.
 ///
 /// Topics: `(Symbol("recovery_executed"),)`
-/// Data:    `AdminTransferred { old_admin, new_admin }`
+/// Data:    `AdminTransferred { old_admins, new_admins }`
 pub fn emit_recovery_executed(env: &Env, payload: &AdminTransferred) {
     env.events().publish(
         (Symbol::new(env, RECOVERY_EXECUTED_EVENT),),
@@ -315,18 +321,18 @@ mod tests {
     #[test]
     fn admin_transferred_payload_shape_is_canonical() {
         let env = Env::default();
-        let old_admin = Address::generate(&env);
-        let new_admin = Address::generate(&env);
+        let old_admins = Vec::from_array(&env, [Address::generate(&env)]);
+        let new_admins = Vec::from_array(&env, [Address::generate(&env)]);
         let payload = AdminTransferred {
-            old_admin: old_admin.clone(),
-            new_admin: new_admin.clone(),
+            old_admins: old_admins.clone(),
+            new_admins: new_admins.clone(),
         };
 
         let val: Val = payload.try_into_val(&env).unwrap();
         let fields: Map<Symbol, Val> = Map::try_from_val(&env, &val).unwrap();
 
-        assert!(fields.contains_key(Symbol::new(&env, "old_admin")));
-        assert!(fields.contains_key(Symbol::new(&env, "new_admin")));
+        assert!(fields.contains_key(Symbol::new(&env, "old_admins")));
+        assert!(fields.contains_key(Symbol::new(&env, "new_admins")));
         assert_eq!(fields.len(), 2);
     }
 

@@ -579,10 +579,9 @@ impl GovernanceContract {
 
         // Issue #514: never let event-building read the possibly-corrupt admin
         // entry and abort recovery before it can repair the set. Resolve the
-        // old admin to `Option` and fall back to the zero-address sentinel
-        // when the entry is missing or has no primary admin, so recovery
-        // always succeeds in replacing the set.
-        let old_admin = read_optional_primary_admin(&env);
+        // old admin set to an empty vector when the entry is missing or
+        // corrupt, so recovery always succeeds in replacing the set.
+        let old_admins = read_optional_admins(&env);
 
         let new_admins = soroban_sdk::vec![&env, pending.new_admin.clone()];
         env.storage().instance().set(&DataKey::Admin, &new_admins);
@@ -595,8 +594,8 @@ impl GovernanceContract {
         events::emit_recovery_executed(
             &env,
             &AdminTransferred {
-                old_admin,
-                new_admin: pending.new_admin.clone(),
+                old_admins,
+                new_admins,
             },
         );
     }
@@ -630,8 +629,8 @@ impl GovernanceContract {
         events::emit_admin_transferred(
             &env,
             &AdminTransferred {
-                old_admin: storage::primary_admin(&old_admins).unwrap(),
-                new_admin: new_admins.get(0).unwrap(),
+                old_admins,
+                new_admins,
             },
         );
     }
@@ -968,20 +967,15 @@ fn read_schema_version(env: &Env) -> u32 {
         .unwrap_or(CURRENT_SCHEMA_VERSION)
 }
 
-/// Returns the primary admin address, or the zero-address sentinel when the
-/// admin entry is missing or has no primary. Used only by `execute_recovery`,
-/// which must be able to repair a corrupt admin set (issue #514).
-fn read_optional_primary_admin(env: &Env) -> Address {
+/// Returns the stored admin set, or an empty vector when the admin entry is
+/// missing or corrupt. Used only by `execute_recovery`, which must be able
+/// to repair a corrupt admin set (issue #514) and must still report the
+/// previous admin set on the `admin_transferred` event (issue #977).
+fn read_optional_admins(env: &Env) -> Vec<Address> {
     env.storage()
         .instance()
-        .get::<_, Vec<Address>>(&DataKey::Admin)
-        .and_then(|admins| storage::primary_admin(&admins))
-        .unwrap_or_else(|| {
-            Address::from_string(&soroban_sdk::String::from_str(
-                env,
-                "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
-            ))
-        })
+        .get(&DataKey::Admin)
+        .unwrap_or_else(|| Vec::new(env))
 }
 
 /// Rejects the zero address with a caller-supplied `GovernanceError`.

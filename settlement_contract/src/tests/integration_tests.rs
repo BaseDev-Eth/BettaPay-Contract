@@ -477,10 +477,10 @@ fn recovery_events_follow_shared_convention_on_both_contracts() {
             continue;
         }
         if let Ok(payload) = AdminTransferred::try_from_val(&env, &data) {
-            if payload.new_admin == new_gov {
+            if payload.new_admins.contains(&new_gov) {
                 found_gov = true;
             }
-            if payload.new_admin == new_settle {
+            if payload.new_admins.contains(&new_settle) {
                 found_settle = true;
             }
         }
@@ -944,6 +944,18 @@ fn stranger_cannot_read_payment_records_or_bump_ttl() {
             )
         ),
         "a non-admin signer must be rejected with Unauthorized"
+    );
+
+    // The same stranger-as-admin signer set is rejected with the identical
+    // Unauthorized code on the batch read entry point (issue #981).
+    assert!(
+        matches!(
+            settle_client.try_get_payments(&merchant, &refs, &0, &invalid_admins),
+            Err(Ok(e)) if e == soroban_sdk::Error::from_contract_error(
+                SettlementError::Unauthorized as u32
+            )
+        ),
+        "a non-admin signer must be rejected with Unauthorized on get_payments"
     );
 }
 

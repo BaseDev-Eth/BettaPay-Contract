@@ -36,20 +36,15 @@ pub(crate) fn read_admin(env: &Env) -> Address {
     storage::primary_admin(&read_admins(env)).unwrap()
 }
 
-/// Returns the primary admin address, or the zero-address sentinel when the
-/// admin entry is missing or has no primary. Used only by `execute_recovery`,
-/// which must be able to repair a corrupt admin set (issue #514 / #687).
-pub(crate) fn read_optional_primary_admin(env: &Env) -> Address {
+/// Returns the stored admin set, or an empty vector when the admin entry is
+/// missing or corrupt. Used only by `execute_recovery`, which must be able to
+/// repair a corrupt admin set (issue #514 / #687) and must still report the
+/// previous admin set on the `admin_transferred` event (issue #977).
+pub(crate) fn read_optional_admins(env: &Env) -> Vec<Address> {
     env.storage()
         .instance()
-        .get::<_, Vec<Address>>(&DataKey::Admin)
-        .and_then(|admins| storage::primary_admin(&admins))
-        .unwrap_or_else(|| {
-            Address::from_string(&soroban_sdk::String::from_str(
-                env,
-                "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
-            ))
-        })
+        .get(&DataKey::Admin)
+        .unwrap_or_else(|| Vec::new(env))
 }
 
 /// Validates and writes the complete admin configuration in its canonical
@@ -256,6 +251,44 @@ pub(crate) fn is_merchant_registered_and_bump_ttl(env: &Env, merchant: Address) 
             .extend_ttl(&key, MERCHANT_TTL_THRESHOLD, MERCHANT_TTL_BUMP);
     }
     exists
+}
+
+/// Returns the number of `Payment` records currently stored for `merchant`
+/// (issue #980). A merchant with no counter entry — including a registered
+/// merchant that has never stored a payment — reads as zero.
+pub(crate) fn read_payment_count(env: &Env, merchant: &Address) -> u32 {
+    env.storage()
+        .persistent()
+        .get(&DataKey::PaymentCount(merchant.clone()))
+        .unwrap_or(0)
+}
+
+/// Increments `merchant`'s payment counter by one, called when
+/// `store_payment_reference` stores a new record. Keeps the counter entry
+/// warm on the same TTL policy as the merchant marker, since both live for
+/// as long as the merchant is active.
+pub(crate) fn increment_payment_count(env: &Env, merchant: &Address) {
+    let key = DataKey::PaymentCount(merchant.clone());
+    let count = read_payment_count(env, merchant);
+    env.storage().persistent().set(&key, &(count + 1));
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, MERCHANT_TTL_THRESHOLD, MERCHANT_TTL_BUMP);
+}
+
+/// Decrements `merchant`'s payment counter by `by`, called when
+/// `prune_payment` / `prune_payments` actually remove stored records. A `by`
+/// of zero is a no-op. The counter never underflows below zero.
+pub(crate) fn decrement_payment_count(env: &Env, merchant: &Address, by: u32) {
+    if by == 0 {
+        return;
+    }
+    let key = DataKey::PaymentCount(merchant.clone());
+    let count = read_payment_count(env, merchant);
+    env.storage().persistent().set(&key, &count.saturating_sub(by));
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, MERCHANT_TTL_THRESHOLD, MERCHANT_TTL_BUMP);
 }
 
 /// Resolves the effective settlement rule for a merchant by preferring the merchant-specific override,

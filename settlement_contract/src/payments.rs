@@ -8,8 +8,9 @@ use crate::policy::{
     PAYMENT_TTL_THRESHOLD,
 };
 use crate::storage::{
-    assert_not_paused, assert_payments_readable, is_merchant_registered_and_bump_ttl,
-    is_merchant_registered_internal, read_min_payment_amount, read_rule_or_default,
+    assert_not_paused, assert_payments_readable, decrement_payment_count,
+    increment_payment_count, is_merchant_registered_and_bump_ttl, is_merchant_registered_internal,
+    read_min_payment_amount, read_payment_count, read_rule_or_default,
     read_rule_or_default_no_bump, read_threshold, verify_admin_auth,
 };
 use crate::types::{Bps, DataKey, FeeSplit, PaymentRecord, PaymentsPage, SettlementRule};
@@ -464,6 +465,7 @@ impl SettlementContract {
             PAYMENT_TTL_THRESHOLD,
             PAYMENT_TTL_BUMP,
         );
+        increment_payment_count(&env, &merchant);
 
         env.events().publish(
             (
@@ -511,9 +513,11 @@ impl SettlementContract {
         reference: BytesN<32>,
     ) {
         verify_admin_auth(&env, &signers, read_threshold(&env));
-        env.storage()
-            .persistent()
-            .remove(&DataKey::Payment(merchant, reference));
+        let key = DataKey::Payment(merchant.clone(), reference);
+        if env.storage().persistent().has(&key) {
+            env.storage().persistent().remove(&key);
+            decrement_payment_count(&env, &merchant, 1);
+        }
     }
 
     /// Remove several of one merchant's payment references in a single call
@@ -551,6 +555,8 @@ impl SettlementContract {
                 removed += 1;
             }
         }
+
+        decrement_payment_count(&env, &merchant, removed);
 
         let admin = signers.get(0).unwrap();
         env.events().publish(
@@ -695,6 +701,29 @@ impl SettlementContract {
             records: Vec::from_slice(&env, &records),
             next_cursor,
         }
+    }
+
+    /// Returns the number of payment records currently stored for `merchant`,
+    /// matching [`MAX_PAYMENTS_PER_MERCHANT`](crate::policy::MAX_PAYMENTS_PER_MERCHANT)
+    /// usage (issue #980).
+    ///
+    /// Enforces the same read authorization as [`Self::get_payments`]: pass an
+    /// empty `signers` vector to authorize as the merchant, or a non-empty
+    /// vector of admin signers to authorize through the configured admin
+    /// threshold. A registered merchant that has never stored a payment
+    /// returns zero.
+    ///
+    /// # Panics
+    ///
+    /// * Auth failure — if the caller is neither the merchant nor an
+    ///   authorized admin signer set.
+    /// * [`PaymentOrphaned`](SettlementError::PaymentOrphaned) — if the
+    ///   merchant was unregistered, its payment records are orphaned and no
+    ///   longer readable (issue #490).
+    pub fn get_payment_count(env: Env, merchant: Address, signers: Vec<Address>) -> u32 {
+        assert_read_authorized(&env, &merchant, &signers);
+        assert_payments_readable(&env, &merchant);
+        read_payment_count(&env, &merchant)
     }
 }
 
