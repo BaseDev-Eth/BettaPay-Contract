@@ -1,13 +1,9 @@
 //! Issue #990: the event topic set is stable.
 //!
 //! `bettapay_common::events::ALL_EVENT_TOPICS` is the single registry of
-//! every topic name any BettaPay contract may emit. This module exercises a
-//! broad lifecycle of settlement entry points and asserts every `topic[0]`
-//! actually emitted is a member of that registry — so a call site that
-//! regresses to an inline string literal (or a typo) fails here instead of
-//! silently drifting out of the registry. It also cross-checks that the
-//! topic constants `event_topic_conformity_tests` asserts against are
-//! themselves registered members.
+//! every topic name any BettaPay contract may emit. This module pins that
+//! complete set and exercises settlement entry points, asserting every
+//! emitted `topic[0]` matches a registry constant.
 
 use crate::*;
 use soroban_sdk::testutils::{Address as _, Events, Ledger};
@@ -16,6 +12,38 @@ use soroban_sdk::{Address, BytesN, Env, FromVal, Symbol};
 use bettapay_common::events;
 
 use super::setup;
+
+const EXPECTED_EVENT_TOPICS: &[&str] = &[
+    "admin_transferred",
+    "paused",
+    "unpaused",
+    "recovery_initiated",
+    "recovery_cancelled",
+    "recovery_executed",
+    "contract_upgraded",
+    "threshold_changed",
+    "recovery_address_updated",
+    "initialized",
+    "migrated",
+    "sys_param_updated",
+    "fee_config_updated",
+    "anchor_upserted",
+    "anchor_removed",
+    "governance_updated",
+    "merchant_registered",
+    "merchant_consent",
+    "merchant_unregistered",
+    "settlement_rule_updated",
+    "settlement_rule_cleared",
+    "default_rule_updated",
+    "bootstrap_fallback",
+    "payment_stored",
+    "payments_pruned",
+    "op_scheduled",
+    "op_executed",
+    "op_cancelled",
+    "fee_ceiling_rejected",
+];
 
 /// Builds the registry as `Symbol`s once per `Env`.
 fn registry(env: &Env) -> soroban_sdk::Vec<Symbol> {
@@ -26,8 +54,8 @@ fn registry(env: &Env) -> soroban_sdk::Vec<Symbol> {
     out
 }
 
-/// Asserts every event emitted so far has a `topic[0]` that is a member of
-/// the registry, failing with the offending topic's position if not.
+/// Asserts every event emitted so far has a `topic[0]` that matches a
+/// registry constant, failing with the offending topic's position if not.
 fn assert_all_topics_registered(env: &Env) {
     let known = registry(env);
     let all = env.events().all();
@@ -152,6 +180,15 @@ fn conformity_tested_topics_are_all_registered() {
             "conformity-tested topic `{name}` is missing from ALL_EVENT_TOPICS"
         );
     }
+}
+
+#[test]
+fn complete_event_topic_set_is_stable() {
+    assert_eq!(
+        events::ALL_EVENT_TOPICS,
+        EXPECTED_EVENT_TOPICS,
+        "event topic additions, removals, or reordering must be deliberate"
+    );
 }
 
 /// Proves the membership check used above actually has teeth: a topic name

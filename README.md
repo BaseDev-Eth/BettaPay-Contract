@@ -48,6 +48,7 @@ BettaPay-Contract/
 - **[Bootstrap Fallback Semantics](docs/bootstrap-fallback.md)**: The 4-tier resolution chain (merchant → default → governance → bootstrap), trigger conditions, field values (`100` platform bps, `5` network bps, `0` delay, `auto_settle` false), and event emission rules.
 - **[Storage Key Ownership and TTL Policies](docs/storage-key-ownership.md)**: Authoritative mapping of all settlement, governance, and `CommonDataKey` keys to owning crates, storage kinds, and TTL bump policies.
 - **[Contract Limits](docs/contract-limits.md)**: Numeric bounds, fee limits, batch limits, and their enforcement points.
+- **[Event Topic Convention](docs/event-topics.md)**: The canonical topic registry, emitted topic set, and indexer-facing naming rules.
 
 ## Deployed Addresses (Testnet)
 

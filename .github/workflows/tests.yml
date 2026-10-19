@@ -68,7 +68,7 @@ jobs:
         run: make check_storage_docs
 
       - name: Make All
-        run: make fmt check clippy test test_scripts check_codeowners check_storage_docs
+        run: make all
 
   msrv:
     name: MSRV

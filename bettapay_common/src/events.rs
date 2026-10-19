@@ -162,10 +162,9 @@ pub const FEE_CEILING_REJECTED_EVENT: &str = "fee_ceiling_rejected";
 /// Every topic name defined in this registry, across all groups (shared,
 /// governance-only, settlement-only).
 ///
-/// Issue #990: each contract's "event topic set is stable" test enumerates
-/// this list and asserts every topic it actually emits is a member of it —
-/// so a call site that regresses to an inline string literal (or a typo)
-/// fails that test instead of silently drifting out of the registry.
+/// Each contract's event-topic tests pin this complete set and assert every
+/// emitted `topic[0]` belongs to it, so additions are deliberate and call
+/// sites cannot silently drift from the registry.
 pub const ALL_EVENT_TOPICS: &[&str] = &[
     // Shared
     ADMIN_TRANSFERRED_EVENT,
