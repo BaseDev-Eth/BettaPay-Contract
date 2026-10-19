@@ -985,3 +985,58 @@ fn admin_set_change_is_confirmed_across_read_helpers_and_events() {
         "the superseded signer set must no longer satisfy an admin-gated call"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Issue #895: cancel after execute
+// ---------------------------------------------------------------------------
+
+/// `execute` consumes the `ScheduledOperation` slot, so a later `cancel` of the
+/// same operation by valid admin signers must fail with the typed
+/// `OperationNotScheduled` error — not resurrect the slot, not panic untyped,
+/// and not roll back the effect the execution already applied.
+#[test]
+fn cancel_after_execute_returns_operation_not_scheduled() {
+    use crate::types::DataKey;
+    use soroban_sdk::xdr::ToXdr;
+    use soroban_sdk::BytesN;
+
+    let (env, client, admins, _) = setup();
+    let new_governance = super::register_governance(&env);
+    let operation = Operation::UpdateGovernance(new_governance.clone());
+
+    let op_hash: BytesN<32> = env.crypto().sha256(&operation.clone().to_xdr(&env)).into();
+    let scheduled_key = DataKey::ScheduledOperation(op_hash);
+    let slot_present = || {
+        env.as_contract(&client.address, || {
+            env.storage().persistent().has(&scheduled_key)
+        })
+    };
+
+    client.schedule(&admins, &operation, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+    assert!(slot_present(), "schedule must write the scheduled slot");
+
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp += DEFAULT_TIMELOCK_DELAY_SECONDS + 1);
+    client.execute(&admins.get(0).unwrap(), &operation);
+
+    assert_eq!(client.get_governance(), new_governance);
+    assert!(!slot_present(), "execute must consume the scheduled slot");
+
+    // `try_cancel` surfaces the contract error as a value: a typed
+    // `Err(Ok(..))` proves the failure is a `SettlementError` raised via
+    // `panic_with_error!`, not an untyped panic crossing the boundary.
+    let result = client.try_cancel(&admins, &operation);
+    assert_eq!(
+        result.err(),
+        Some(Ok(soroban_sdk::Error::from(
+            SettlementError::OperationNotScheduled
+        )))
+    );
+
+    // The executed effect is not rolled back and the slot stays absent.
+    assert_eq!(client.get_governance(), new_governance);
+    assert!(
+        !slot_present(),
+        "a failed cancel must not resurrect the scheduled slot"
+    );
+}
