@@ -9,7 +9,8 @@ Thank you for contributing to the BettaPay Soroban smart contracts. This guide c
 - [Getting Started](#getting-started)
 - [Development Workflow](#development-workflow)
 - [Optional: Pre-Commit Hook](#optional-pre-commit-hook)
-- [Upgrades and Storage Migrations](DEVELOPMENT.md)
+- [Upgrades and Storage Migrations](DEVELOPMENT.md#operator-runbook-probe-upgrade-migrate-and-verify)
+- [Event Topic Convention](docs/event-topics.md)
 - [Testing](#testing)
 - [Coverage](#coverage)
 - [Dependency auditing](#dependency-auditing)
@@ -465,7 +466,7 @@ a stale or malformed `CODEOWNERS` fails CI rather than rotting silently.
 
 Before requesting review, confirm:
 
-- [ ] `cargo fmt --all -- --check` passes
+- [ ] `cargo fmt --all --check` passes
 - [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings` passes
 - [ ] `cargo test --workspace` passes
 - [ ] `bash scripts/tests/tooling_smoke_test.sh` passes
@@ -474,6 +475,10 @@ Before requesting review, confirm:
 - [ ] New behavior has corresponding unit tests
 - [ ] Snapshot changes (if any) are intentional and documented
 - [ ] PR description references the related issue (e.g. `Closes #125`)
+
+Formatting uses the checked-in [`rustfmt.toml`](rustfmt.toml) configuration;
+`make fmt` runs the same workspace-wide `cargo fmt --all --check` command used
+in CI.
 - [ ] If your change touches a path listed in [`CODEOWNERS`](CODEOWNERS), you've flagged it for the mapped owner(s)
 
 ## Commit Message Conventions

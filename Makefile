@@ -91,4 +91,4 @@ wasm_size: optimize
 check_codeowners:
 	bash scripts/check_codeowners.sh
 
-all: fmt check clippy test check_snapshots test_scripts check_codeowners check_interface_parity check_storage_docs
+all: fmt check clippy test check_snapshots test_scripts check_codeowners check_interface_parity check_storage_docs wasm_size
