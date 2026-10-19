@@ -1402,6 +1402,138 @@ fn execute_recovery_after_cancel_panics() {
     client.execute_recovery();
 }
 
+// Issue #908: cancel then re-initiate recovery.
+// Proves that a cancelled recovery leaves no residue in storage, a fresh initiation
+// succeeds with its own 7-day delay, execution before the new delay fails with
+// RecoveryDelayActive, execution at or after delay applies the new admin, and
+// recovery_initiated / recovery_cancelled events are emitted once per transition.
+#[test]
+fn cancel_then_reinitiate_recovery() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let recovery_address = Address::generate(&env);
+    let target1 = Address::generate(&env);
+    let target2 = Address::generate(&env);
+    let governance = register_governance(&env);
+    let contract_id = env.register_contract(None, SettlementContract);
+    let client = SettlementContractClient::new(&env, &contract_id);
+    let admins = soroban_sdk::vec![&env, admin.clone()];
+    let deployer = Address::generate(&env);
+    client.init(&deployer, &admins, &1, &governance, &recovery_address);
+
+    let count_events = |topic: &str| -> u32 {
+        let events = env.events().all();
+        let sym = Symbol::new(&env, topic);
+        let mut count = 0;
+        for i in 0..events.len() {
+            let (_, topics, _) = events.get(i).unwrap();
+            if !topics.is_empty() && Symbol::from_val(&env, &topics.get(0).unwrap()) == sym {
+                count += 1;
+            }
+        }
+        count
+    };
+
+    // Initial state: no recovery events yet.
+    assert_eq!(
+        count_events(bettapay_common::events::RECOVERY_INITIATED_EVENT),
+        0
+    );
+    assert_eq!(
+        count_events(bettapay_common::events::RECOVERY_CANCELLED_EVENT),
+        0
+    );
+
+    // 1. First initiation.
+    client.initiate_recovery(&target1);
+    assert_eq!(
+        count_events(bettapay_common::events::RECOVERY_INITIATED_EVENT),
+        1,
+        "recovery_initiated must be emitted once on first initiation"
+    );
+
+    // 2. Cancellation.
+    client.cancel_recovery(&admins);
+    assert_eq!(
+        count_events(bettapay_common::events::RECOVERY_CANCELLED_EVENT),
+        1,
+        "recovery_cancelled must be emitted once on cancellation"
+    );
+
+    // Acceptance criteria 1: PendingRecovery is absent from instance storage.
+    let pending_after_cancel: Option<PendingRecovery> = env.as_contract(&client.address, || {
+        env.storage()
+            .instance()
+            .get(&CommonDataKey::PendingRecovery)
+    });
+    assert!(
+        pending_after_cancel.is_none(),
+        "PendingRecovery must be absent from instance storage after cancellation"
+    );
+
+    // Advance time slightly to distinguish initiation timestamps.
+    env.ledger().with_mut(|l| l.timestamp += 100);
+    let t1 = env.ledger().timestamp();
+
+    // Acceptance criteria 2: A second initiate_recovery is accepted and writes a new pending record.
+    client.initiate_recovery(&target2);
+    assert_eq!(
+        count_events(bettapay_common::events::RECOVERY_INITIATED_EVENT),
+        2,
+        "recovery_initiated must be emitted once per initiation transition"
+    );
+
+    let pending_second: Option<PendingRecovery> = env.as_contract(&client.address, || {
+        env.storage()
+            .instance()
+            .get(&CommonDataKey::PendingRecovery)
+    });
+    assert!(
+        pending_second.is_some(),
+        "second initiate_recovery must write a new pending record"
+    );
+    let record2 = pending_second.unwrap();
+    assert_eq!(record2.new_admin, target2);
+    assert_eq!(
+        record2.execute_after,
+        t1 + RECOVERY_DELAY_SECONDS,
+        "new execute_after must equal initiation timestamp plus RECOVERY_DELAY_SECONDS"
+    );
+
+    // Acceptance criteria 3: execute_recovery before the new execute_after returns RecoveryDelayActive.
+    env.ledger()
+        .with_mut(|l| l.timestamp = record2.execute_after - 1);
+    let premature_exec = client.try_execute_recovery();
+    assert_eq!(
+        premature_exec.unwrap_err().unwrap(),
+        soroban_sdk::Error::from_contract_error(SettlementError::RecoveryDelayActive as u32),
+        "execute_recovery before new execute_after must fail with RecoveryDelayActive"
+    );
+
+    // Acceptance criteria 4: execute_recovery at or after the new delay advances the admin set.
+    env.ledger()
+        .with_mut(|l| l.timestamp = record2.execute_after);
+    client.execute_recovery();
+
+    assert_eq!(
+        client.get_admin(),
+        soroban_sdk::vec![&env, target2.clone()],
+        "execute_recovery must advance the admin set to the newly initiated target"
+    );
+    assert_eq!(client.get_threshold(), 1);
+
+    // Acceptance criteria 5: recovery_initiated and recovery_cancelled are each emitted once per transition.
+    assert_eq!(
+        count_events(bettapay_common::events::RECOVERY_INITIATED_EVENT),
+        2
+    );
+    assert_eq!(
+        count_events(bettapay_common::events::RECOVERY_CANCELLED_EVENT),
+        1
+    );
+}
+
 #[test]
 #[should_panic(expected = "Error(Contract, #8)")]
 fn execute_recovery_second_call_panics() {
