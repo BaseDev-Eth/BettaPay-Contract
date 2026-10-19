@@ -968,6 +968,213 @@ fn change_threshold_above_admin_count_rejects_with_invalid_threshold() {
     client.change_threshold(&admins, &3);
 }
 
+// Issue #904: multisig threshold larger than admin set is rejected as
+// `InvalidThreshold` (#14) rather than `Unauthorized` (#3) at init, transfer_admin,
+// and schedule time. Admin and Threshold storage entries must remain unchanged.
+#[test]
+fn threshold_above_admin_count_rejects_with_invalid_threshold() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let a1 = Address::generate(&env);
+    let single_admin = soroban_sdk::vec![&env, a1.clone()];
+    let recovery = Address::generate(&env);
+    let governance = register_governance(&env);
+    let contract_id = env.register_contract(None, SettlementContract);
+    let client = SettlementContractClient::new(&env, &contract_id);
+    let deployer = Address::generate(&env);
+
+    // 1. init with one admin and threshold 2 returns SettlementError::InvalidThreshold.
+    let init_err = client
+        .try_init(&deployer, &single_admin, &2, &governance, &recovery)
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(
+        init_err,
+        soroban_sdk::Error::from_contract_error(SettlementError::InvalidThreshold as u32)
+    );
+    assert_eq!(SettlementError::InvalidThreshold as u32, 14);
+
+    // No Admin or Threshold storage entry is written on rejection.
+    env.as_contract(&client.address, || {
+        assert!(!env.storage().instance().has(&DataKey::Admin));
+        assert!(!env.storage().instance().has(&CommonDataKey::Threshold));
+    });
+
+    // Initialize properly with 2 admins and threshold 2.
+    let a2 = Address::generate(&env);
+    let initial_admins = soroban_sdk::vec![&env, a1.clone(), a2.clone()];
+    let initial_threshold = 2u32;
+    client.init(
+        &deployer,
+        &initial_admins,
+        &initial_threshold,
+        &governance,
+        &recovery,
+    );
+    assert_eq!(client.get_admin(), initial_admins);
+    assert_eq!(client.get_threshold(), initial_threshold);
+
+    // 2. transfer_admin with an oversized threshold returns InvalidThreshold.
+    let target1 = Address::generate(&env);
+    let target2 = Address::generate(&env);
+    let new_admins = soroban_sdk::vec![&env, target1.clone(), target2.clone()]; // len 2
+    let oversized_threshold = 3u32; // 3 > 2
+
+    let transfer_err = client
+        .try_transfer_admin(&initial_admins, &new_admins, &oversized_threshold)
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(
+        transfer_err,
+        soroban_sdk::Error::from_contract_error(SettlementError::InvalidThreshold as u32)
+    );
+
+    // The Admin and Threshold instance entries are unchanged after rejection.
+    assert_eq!(client.get_admin(), initial_admins);
+    assert_eq!(client.get_threshold(), initial_threshold);
+    env.as_contract(&client.address, || {
+        assert_eq!(
+            env.storage().instance().get(&DataKey::Admin),
+            Some(initial_admins.clone())
+        );
+        assert_eq!(
+            env.storage().instance().get(&CommonDataKey::Threshold),
+            Some(initial_threshold)
+        );
+    });
+
+    // 3. schedule of a TransferAdmin operation with an oversized threshold returns InvalidThreshold.
+    let op = Operation::TransferAdmin(new_admins.clone(), oversized_threshold);
+    let schedule_err = client
+        .try_schedule(&initial_admins, &op, &DEFAULT_TIMELOCK_DELAY_SECONDS)
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(
+        schedule_err,
+        soroban_sdk::Error::from_contract_error(SettlementError::InvalidThreshold as u32)
+    );
+
+    // The Admin and Threshold instance entries are unchanged after rejection.
+    assert_eq!(client.get_admin(), initial_admins);
+    assert_eq!(client.get_threshold(), initial_threshold);
+    env.as_contract(&client.address, || {
+        assert_eq!(
+            env.storage().instance().get(&DataKey::Admin),
+            Some(initial_admins.clone())
+        );
+        assert_eq!(
+            env.storage().instance().get(&CommonDataKey::Threshold),
+            Some(initial_threshold)
+        );
+    });
+}
+
+// Issue #904: init with one admin and threshold 2 returns SettlementError::InvalidThreshold
+// and leaves Admin and Threshold instance storage unset.
+#[test]
+fn init_threshold_above_admin_count_rejects_with_invalid_threshold() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let admins = soroban_sdk::vec![&env, admin];
+    let recovery = Address::generate(&env);
+    let governance = register_governance(&env);
+    let contract_id = env.register_contract(None, SettlementContract);
+    let client = SettlementContractClient::new(&env, &contract_id);
+    let deployer = Address::generate(&env);
+
+    let res = client.try_init(&deployer, &admins, &2, &governance, &recovery);
+    assert_eq!(
+        res.unwrap_err().unwrap(),
+        soroban_sdk::Error::from_contract_error(SettlementError::InvalidThreshold as u32)
+    );
+    assert_eq!(SettlementError::InvalidThreshold as u32, 14);
+
+    env.as_contract(&client.address, || {
+        assert!(!env.storage().instance().has(&DataKey::Admin));
+        assert!(!env.storage().instance().has(&CommonDataKey::Threshold));
+    });
+}
+
+// Issue #904: transfer_admin with threshold greater than new_admins.len() returns
+// InvalidThreshold and leaves Admin and Threshold instance storage unchanged.
+#[test]
+fn transfer_admin_oversized_threshold_rejects_with_invalid_threshold() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let a1 = Address::generate(&env);
+    let a2 = Address::generate(&env);
+    let admins = soroban_sdk::vec![&env, a1.clone(), a2.clone()];
+    let recovery = Address::generate(&env);
+    let governance = register_governance(&env);
+    let contract_id = env.register_contract(None, SettlementContract);
+    let client = SettlementContractClient::new(&env, &contract_id);
+    let deployer = Address::generate(&env);
+    client.init(&deployer, &admins, &2, &governance, &recovery);
+
+    let target1 = Address::generate(&env);
+    let target2 = Address::generate(&env);
+    let new_admins = soroban_sdk::vec![&env, target1, target2];
+    let oversized_threshold = 3u32;
+
+    let res = client.try_transfer_admin(&admins, &new_admins, &oversized_threshold);
+    assert_eq!(
+        res.unwrap_err().unwrap(),
+        soroban_sdk::Error::from_contract_error(SettlementError::InvalidThreshold as u32)
+    );
+    assert_eq!(SettlementError::InvalidThreshold as u32, 14);
+
+    assert_eq!(client.get_admin(), admins);
+    assert_eq!(client.get_threshold(), 2);
+    env.as_contract(&client.address, || {
+        assert_eq!(env.storage().instance().get(&DataKey::Admin), Some(admins));
+        assert_eq!(
+            env.storage().instance().get(&CommonDataKey::Threshold),
+            Some(2u32)
+        );
+    });
+}
+
+// Issue #904: schedule of Operation::TransferAdmin with threshold greater than
+// new_admins.len() returns InvalidThreshold and leaves Admin and Threshold instance storage unchanged.
+#[test]
+fn schedule_transfer_admin_oversized_threshold_rejects_with_invalid_threshold() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let a1 = Address::generate(&env);
+    let a2 = Address::generate(&env);
+    let admins = soroban_sdk::vec![&env, a1.clone(), a2.clone()];
+    let recovery = Address::generate(&env);
+    let governance = register_governance(&env);
+    let contract_id = env.register_contract(None, SettlementContract);
+    let client = SettlementContractClient::new(&env, &contract_id);
+    let deployer = Address::generate(&env);
+    client.init(&deployer, &admins, &2, &governance, &recovery);
+
+    let target1 = Address::generate(&env);
+    let target2 = Address::generate(&env);
+    let new_admins = soroban_sdk::vec![&env, target1, target2];
+    let oversized_threshold = 3u32;
+
+    let op = Operation::TransferAdmin(new_admins, oversized_threshold);
+    let res = client.try_schedule(&admins, &op, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+    assert_eq!(
+        res.unwrap_err().unwrap(),
+        soroban_sdk::Error::from_contract_error(SettlementError::InvalidThreshold as u32)
+    );
+    assert_eq!(SettlementError::InvalidThreshold as u32, 14);
+
+    assert_eq!(client.get_admin(), admins);
+    assert_eq!(client.get_threshold(), 2);
+    env.as_contract(&client.address, || {
+        assert_eq!(env.storage().instance().get(&DataKey::Admin), Some(admins));
+        assert_eq!(
+            env.storage().instance().get(&CommonDataKey::Threshold),
+            Some(2u32)
+        );
+    });
+}
+
 // Issue #565: threshold == 0 must also be rejected before the auth gate.
 #[test]
 #[should_panic(expected = "Error(Contract, #14)")]
