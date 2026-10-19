@@ -818,7 +818,6 @@ fn schedule_with_zero_delay_is_rejected() {
 #[test]
 fn admin_set_change_is_confirmed_across_read_helpers_and_events() {
     let (env, client, admins, _merchant) = setup();
-    let old_admin = admins.get(0).unwrap();
 
     // --- Direct path ---
     let new_admin = Address::generate(&env);
@@ -830,8 +829,8 @@ fn admin_set_change_is_confirmed_across_read_helpers_and_events() {
 
     let (_, _, data) = env.events().all().last().unwrap();
     let payload = AdminTransferred::try_from_val(&env, &data).unwrap();
-    assert_eq!(payload.old_admin, old_admin);
-    assert_eq!(payload.new_admin, new_admin);
+    assert_eq!(payload.old_admins, admins);
+    assert_eq!(payload.new_admins, new_admins);
 
     assert!(
         client.try_pause(&admins).is_err(),
@@ -852,8 +851,8 @@ fn admin_set_change_is_confirmed_across_read_helpers_and_events() {
 
     let (_, _, data) = env.events().all().last().unwrap();
     let payload = AdminTransferred::try_from_val(&env, &data).unwrap();
-    assert_eq!(payload.old_admin, new_admin);
-    assert_eq!(payload.new_admin, next_admin);
+    assert_eq!(payload.old_admins, new_admins);
+    assert_eq!(payload.new_admins, next_admins);
 
     assert!(
         client.try_pause(&new_admins).is_err(),

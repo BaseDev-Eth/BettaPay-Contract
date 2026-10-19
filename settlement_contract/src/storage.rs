@@ -36,20 +36,15 @@ pub(crate) fn read_admin(env: &Env) -> Address {
     storage::primary_admin(&read_admins(env)).unwrap()
 }
 
-/// Returns the primary admin address, or the zero-address sentinel when the
-/// admin entry is missing or has no primary. Used only by `execute_recovery`,
-/// which must be able to repair a corrupt admin set (issue #514 / #687).
-pub(crate) fn read_optional_primary_admin(env: &Env) -> Address {
+/// Returns the stored admin set, or an empty vector when the admin entry is
+/// missing or corrupt. Used only by `execute_recovery`, which must be able to
+/// repair a corrupt admin set (issue #514 / #687) and must still report the
+/// previous admin set on the `admin_transferred` event (issue #977).
+pub(crate) fn read_optional_admins(env: &Env) -> Vec<Address> {
     env.storage()
         .instance()
-        .get::<_, Vec<Address>>(&DataKey::Admin)
-        .and_then(|admins| storage::primary_admin(&admins))
-        .unwrap_or_else(|| {
-            Address::from_string(&soroban_sdk::String::from_str(
-                env,
-                "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
-            ))
-        })
+        .get(&DataKey::Admin)
+        .unwrap_or_else(|| Vec::new(env))
 }
 
 /// Validates and writes the complete admin configuration in its canonical

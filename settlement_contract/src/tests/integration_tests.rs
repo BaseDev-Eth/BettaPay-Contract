@@ -477,10 +477,10 @@ fn recovery_events_follow_shared_convention_on_both_contracts() {
             continue;
         }
         if let Ok(payload) = AdminTransferred::try_from_val(&env, &data) {
-            if payload.new_admin == new_gov {
+            if payload.new_admins.contains(&new_gov) {
                 found_gov = true;
             }
-            if payload.new_admin == new_settle {
+            if payload.new_admins.contains(&new_settle) {
                 found_settle = true;
             }
         }
