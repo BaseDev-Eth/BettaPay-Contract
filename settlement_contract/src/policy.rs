@@ -29,6 +29,14 @@ pub const FALLBACK_SETTLEMENT_DELAY_LEDGER: u32 = 17280;
 /// pruned (`prune_payments`) in a single batch call
 pub const MAX_PAYMENTS_BATCH: u32 = 100;
 
+/// Maximum number of scheduled operations that `cancel_all` may cancel in a
+/// single call (issue #975). Soroban cannot enumerate persistent
+/// `ScheduledOperation` keys, so callers supply the explicit list to cancel;
+/// this cap keeps a single incident-response call's gas and transaction
+/// footprint bounded and predictable, matching `MAX_PAYMENTS_BATCH`'s role
+/// for payment batches.
+pub const MAX_CANCEL_ALL_BATCH: u32 = 50;
+
 /// Fixed byte length of a payment reference (`BytesN<32>`), named so callers
 /// and docs have a canonical value instead of a bare `32`. Enforced
 /// structurally by the `BytesN<32>` type, not by a runtime check.

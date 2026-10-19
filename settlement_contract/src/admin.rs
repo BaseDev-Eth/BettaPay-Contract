@@ -11,7 +11,7 @@ use bettapay_common::{
 use crate::errors::SettlementError;
 use crate::policy::{
     BOOTSTRAP_DEFAULT_RULE, CURRENT_SCHEMA_VERSION, DEFAULT_TIMELOCK_DELAY_SECONDS,
-    MAX_SETTLEMENT_DELAY_LEDGER, MERCHANT_TTL_BUMP, MERCHANT_TTL_THRESHOLD,
+    MAX_CANCEL_ALL_BATCH, MAX_SETTLEMENT_DELAY_LEDGER, MERCHANT_TTL_BUMP, MERCHANT_TTL_THRESHOLD,
     MIN_TIMELOCK_DELAY_SECONDS, RULE_TTL_BUMP, RULE_TTL_THRESHOLD, SCHEDULED_OP_TTL_BUMP,
     SCHEDULED_OP_TTL_THRESHOLD, SUPPORTED_INTERFACE_VERSION,
 };
@@ -674,6 +674,62 @@ impl SettlementContract {
             (Symbol::new(&env, events::OP_CANCELLED_EVENT), op_hash),
             caller,
         );
+    }
+
+    /// Cancels a bounded batch of pending scheduled operations in one call
+    /// (issue #975): an emergency drain for an incident where a compromised
+    /// admin has queued work, without one transaction per operation.
+    ///
+    /// Soroban cannot enumerate persistent `ScheduledOperation` keys, so
+    /// callers must supply the explicit `operations` list to cancel — the
+    /// same [`Operation`] values originally passed to
+    /// [`schedule`](Self::schedule). Each entry is matched byte-for-byte
+    /// against the XDR stored under its hash, exactly like
+    /// [`cancel`](Self::cancel) (issue #570), so a hash collision cannot
+    /// remove an unrelated pending operation. An entry that is not currently
+    /// scheduled, or whose stored XDR does not match, is skipped as a no-op
+    /// so a batch cancellation can be retried safely.
+    ///
+    /// Exactly one `ops_cancelled` event is emitted per call, carrying the
+    /// executor and the number of operations actually cancelled.
+    ///
+    /// # Panics
+    ///
+    /// * [`Paused`](SettlementError::Paused) — if the contract is currently paused.
+    /// * [`Unauthorized`](SettlementError::Unauthorized) — if signers lack admin authority.
+    /// * [`BatchTooLarge`](SettlementError::BatchTooLarge) — if `operations` exceeds
+    ///   [`MAX_CANCEL_ALL_BATCH`].
+    pub fn cancel_all(env: Env, signers: Vec<Address>, operations: Vec<Operation>) -> u32 {
+        verify_admin_auth(&env, &signers, read_threshold(&env));
+        assert_not_paused(&env);
+        let caller = signers.get(0).unwrap();
+
+        if operations.len() > MAX_CANCEL_ALL_BATCH {
+            panic_with_error!(&env, SettlementError::BatchTooLarge);
+        }
+
+        let mut cancelled: u32 = 0;
+        for operation in operations.iter() {
+            let operation_xdr = operation.to_xdr(&env);
+            let op_hash: BytesN<32> = env.crypto().sha256(&operation_xdr).into();
+            let key = DataKey::ScheduledOperation(op_hash);
+
+            if let Some(scheduled) = env.storage().persistent().get::<_, ScheduledOp>(&key) {
+                // Same byte-for-byte proof as `cancel()` (issue #570): a hash
+                // match alone does not prove `operation` is what was
+                // scheduled under that slot.
+                if scheduled.operation_xdr == operation_xdr {
+                    env.storage().persistent().remove(&key);
+                    cancelled += 1;
+                }
+            }
+        }
+
+        env.events().publish(
+            (Symbol::new(&env, events::OPS_CANCELLED_EVENT),),
+            (caller, cancelled),
+        );
+        cancelled
     }
 
     // --- Internal Admin Functions ---

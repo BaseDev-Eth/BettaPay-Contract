@@ -161,6 +161,10 @@ pub const OP_EXECUTED_EVENT: &str = "op_executed";
 /// Topic emitted when a scheduled administrative operation is cancelled.
 pub const OP_CANCELLED_EVENT: &str = "op_cancelled";
 
+/// Topic emitted once per `cancel_all` call. Data is
+/// `(executor, cancelled_count)` (issue #975).
+pub const OPS_CANCELLED_EVENT: &str = "ops_cancelled";
+
 /// Emits the `admin_transferred` event with the structured
 /// [`AdminTransferred`] payload.
 ///
