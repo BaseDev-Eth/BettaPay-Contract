@@ -7,6 +7,7 @@ the [README](README.md).
 ## Table of Contents
 
 - [Contract Upgrades](#contract-upgrades)
+- [Operator Runbook: Probe, Upgrade, Migrate, and Verify](#operator-runbook-probe-upgrade-migrate-and-verify)
 - [Storage Layout](#storage-layout)
 - [Lifecycle & Architecture Specifications](#lifecycle--architecture-specifications)
 - [Two Constraints That Shape Every Migration](#two-constraints-that-shape-every-migration)
@@ -40,6 +41,136 @@ runtime — after the upgrade has already landed.
 That is the whole reason this document exists. `upgrade` is safe precisely
 because it ignores storage, which means changing storage is a separate problem
 you have to solve deliberately.
+
+## Operator Runbook: Probe, Upgrade, Migrate, and Verify
+
+Follow these steps for each contract independently. The order is deliberate:
+probe the candidate Wasm, upgrade the contract, call its migration entry
+point, then verify before moving on. The upgrade entry point also probes the
+candidate itself and refuses a Wasm that does not implement the required
+interface.
+
+Set the network, IDs, and signer values for the deployment. `ADMIN_SIGNERS`
+must be a JSON array containing enough current admin addresses to meet that
+contract's stored multisig threshold; those admins must authorize the
+transaction. `DEPLOYER` is the funded CLI identity that submits and pays for
+the operator transactions.
+
+```bash
+export RPC="https://soroban-rpc.example"
+export PASS="network passphrase"
+export DEPLOYER="funded-operator-identity"
+export ADMIN_SIGNERS='["G...ADMIN_1","G...ADMIN_2"]'
+export SETTLEMENT_ID="C...SETTLEMENT"
+export GOVERNANCE_ID="C...GOVERNANCE"
+```
+
+1. **Build and upload the candidate Wasm.** Keep the previous deployed Wasm
+   artifacts and hashes for rollback analysis.
+
+   ```bash
+   make optimize
+   SETTLEMENT_WASM_HASH=$(soroban contract upload \
+     --wasm target/optimized/settlement_contract_opt.wasm \
+     --source-account "$DEPLOYER" --rpc-url "$RPC" --network-passphrase "$PASS")
+   GOVERNANCE_WASM_HASH=$(soroban contract upload \
+     --wasm target/optimized/governance_contract_opt.wasm \
+     --source-account "$DEPLOYER" --rpc-url "$RPC" --network-passphrase "$PASS")
+   ```
+
+2. **Probe each candidate.** Deploy a disposable instance of each uploaded
+   candidate, then invoke `supports_interface` on it without calling `init`.
+   The current required interface is `1` for both contracts:
+   `settlement_contract::SUPPORTED_INTERFACE_VERSION` and the governance
+   contract's `SUPPORTED_INTERFACE_VERSION`. Continue only when both calls
+   return `true`. The `upgrade` calls below repeat this check against the
+   uploaded Wasm before changing the live executable through
+   `bettapay_common::upgrade::probe_supports_interface`.
+
+   ```bash
+   SETTLEMENT_PROBE_ID=$(soroban contract deploy \
+     --wasm target/optimized/settlement_contract_opt.wasm \
+     --source-account "$DEPLOYER" --rpc-url "$RPC" --network-passphrase "$PASS")
+   soroban contract invoke --id "$SETTLEMENT_PROBE_ID" \
+     --source-account "$DEPLOYER" --rpc-url "$RPC" --network-passphrase "$PASS" -- \
+     supports_interface --version 1
+
+   GOVERNANCE_PROBE_ID=$(soroban contract deploy \
+     --wasm target/optimized/governance_contract_opt.wasm \
+     --source-account "$DEPLOYER" --rpc-url "$RPC" --network-passphrase "$PASS")
+   soroban contract invoke --id "$GOVERNANCE_PROBE_ID" \
+     --source-account "$DEPLOYER" --rpc-url "$RPC" --network-passphrase "$PASS" -- \
+     supports_interface --version 1
+   ```
+
+3. **Optionally pause writes before the upgrade.** Each `pause` call requires
+   the contract's current admin threshold. Settlement takes a bounded
+   `reason`; governance uses its unspecified-reason default.
+
+   ```bash
+   soroban contract invoke --id "$SETTLEMENT_ID" --source-account "$DEPLOYER" \
+     --rpc-url "$RPC" --network-passphrase "$PASS" -- \
+     pause --signers "$ADMIN_SIGNERS" --reason 1
+   soroban contract invoke --id "$GOVERNANCE_ID" --source-account "$DEPLOYER" \
+     --rpc-url "$RPC" --network-passphrase "$PASS" -- \
+     pause --signers "$ADMIN_SIGNERS"
+   ```
+
+   `upgrade` is permitted while paused, but both contracts reject `migrate`
+   while paused. If you pause, unpause after the code swap and before the
+   migration; arrange an external write freeze if writes must remain stopped
+   across that interval.
+
+4. **Upgrade the live contracts.** Each entry point is named `upgrade` and
+   requires a `signers` vector meeting the current admin threshold.
+
+   ```bash
+   soroban contract invoke --id "$SETTLEMENT_ID" --source-account "$DEPLOYER" \
+     --rpc-url "$RPC" --network-passphrase "$PASS" -- \
+     upgrade --signers "$ADMIN_SIGNERS" --new_wasm_hash "$SETTLEMENT_WASM_HASH"
+   soroban contract invoke --id "$GOVERNANCE_ID" --source-account "$DEPLOYER" \
+     --rpc-url "$RPC" --network-passphrase "$PASS" -- \
+     upgrade --signers "$ADMIN_SIGNERS" --new_wasm_hash "$GOVERNANCE_WASM_HASH"
+   ```
+
+5. **Unpause if step 3 was used, then migrate each contract.** The
+   admin-gated `migrate(signers)` entry point must be called on each contract,
+   with enough current admins to satisfy its threshold. It advances that
+   contract's instance-storage `SchemaVersion` marker through
+   `CURRENT_SCHEMA_VERSION` and emits `migrated` with the resulting version.
+
+   ```bash
+   soroban contract invoke --id "$SETTLEMENT_ID" --source-account "$DEPLOYER" \
+     --rpc-url "$RPC" --network-passphrase "$PASS" -- \
+     unpause --signers "$ADMIN_SIGNERS"
+   soroban contract invoke --id "$GOVERNANCE_ID" --source-account "$DEPLOYER" \
+     --rpc-url "$RPC" --network-passphrase "$PASS" -- \
+     unpause --signers "$ADMIN_SIGNERS"
+
+   soroban contract invoke --id "$SETTLEMENT_ID" --source-account "$DEPLOYER" \
+     --rpc-url "$RPC" --network-passphrase "$PASS" -- \
+     migrate --signers "$ADMIN_SIGNERS"
+   soroban contract invoke --id "$GOVERNANCE_ID" --source-account "$DEPLOYER" \
+     --rpc-url "$RPC" --network-passphrase "$PASS" -- \
+     migrate --signers "$ADMIN_SIGNERS"
+   ```
+
+   Run the `unpause` calls only for contracts paused in step 3.
+
+6. **Verify before declaring success.** Confirm each migration invocation
+   succeeded and inspect its `migrated` event data for the expected schema
+   version. `version` reports the deployed build's schema version; it is not
+   a read of the stored marker. Read representative contract state through
+   the new public getters and compare it with pre-upgrade records. Confirm
+   both contracts' expected behavior before proceeding with unrelated
+   deployments or upgrades.
+
+7. **Rollback deliberately.** Keep the old Wasm and its hash available.
+   Rolling code back is another admin-threshold `upgrade` to the old hash,
+   and is safe only if that old code can read the current storage schema.
+   Storage writes made by `migrate` are not automatically undone. If the
+   schema has changed incompatibly, do not blindly restore old Wasm; use a
+   compatible forward fix or a reviewed reverse migration first.
 
 ## Storage Layout
 
@@ -198,7 +329,7 @@ become.
 ### 3. Upgrade
 
 ```bash
-stellar contract invoke --id "$SETTLEMENT_ID" -- upgrade \
+soroban contract invoke --id "$SETTLEMENT_ID" -- upgrade \
   --signers '["G...ADMIN"]' \
   --new_wasm_hash "$NEW_WASM_HASH"
 ```
@@ -210,25 +341,29 @@ old-format data. Keep the window short, and see
 ### 4. Migrate
 
 ```bash
-stellar contract invoke --id "$SETTLEMENT_ID" -- migrate
+soroban contract invoke --id "$SETTLEMENT_ID" -- migrate
 ```
 
 `migrate` reads with the old type, writes with the new one, removes superseded
-keys, and sets `SchemaVersion` to the new value. It must be idempotent and must
-reject a re-run — see the example below.
+keys, and sets `SchemaVersion` to the new value. It is idempotent; calling it
+again when the marker is current is a no-op — see the example below.
 
 ### 5. Verify before moving on
 
 Read back a representative sample through the new getters and confirm the
-values match what was there before. Confirm `SchemaVersion` advanced. Only then
-treat the migration as done.
+values match what was there before. The `migrated` event includes the schema
+version written by the call; `version()` reports the deployed build's
+compile-time version, not the stored marker. Only treat the migration as done
+after checking the event and representative state.
 
 ### 6. Consider pausing for the window
 
 Both contracts have `pause`/`unpause`. If the old and new formats cannot
-coexist safely for the duration — for instance if a write in the old format
-during the window would be missed by the migration — pause before the upgrade
-and unpause after verification.
+coexist safely during the upgrade, pause before it. `migrate` is rejected
+while paused, so unpause before migrating; arrange an external write freeze if
+mutations must remain blocked through the migration. See the
+[operator runbook](#operator-runbook-probe-upgrade-migrate-and-verify) for
+both contracts' commands.
 
 ### 7. Strip the migration code in a later upgrade
 

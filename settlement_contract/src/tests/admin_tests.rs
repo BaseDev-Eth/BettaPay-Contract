@@ -942,6 +942,87 @@ fn executes_contract_wasm_upgrade_successfully() {
     assert_eq!(live_client.get_admin(), admins);
 }
 
+// Issue #910: Add a test for pause then upgrade then unpause.
+// Verifies that upgrade succeeds while the contract is paused and emits `contract_upgraded`,
+// while payment entry points (`store_payment_reference`) stay blocked with `SettlementError::Paused`
+// until unpause, at which point payment processing is restored.
+// Also verifies `is_paused` reflects `true` then `false` without raising `AlreadyPaused` or `AlreadyUnpaused`.
+#[test]
+fn pause_then_upgrade_then_unpause() {
+    let (env, client, admins, merchant) = setup();
+    client.register_merchant(&admins, &merchant);
+
+    let count_events = |topic: &str| -> u32 {
+        let events = env.events().all();
+        let sym = Symbol::new(&env, topic);
+        let mut count = 0;
+        for i in 0..events.len() {
+            let (_, topics, _) = events.get(i).unwrap();
+            if !topics.is_empty() && Symbol::from_val(&env, &topics.get(0).unwrap()) == sym {
+                count += 1;
+            }
+        }
+        count
+    };
+
+    // Initially, contract is not paused.
+    assert!(!client.is_paused());
+
+    // 1. Pause transitions is_paused to true (no AlreadyPaused raised).
+    let pause_res = client.try_pause(&admins, &1u32);
+    assert!(pause_res.is_ok(), "pause must succeed without error");
+    assert!(client.is_paused(), "is_paused must reflect true after pause");
+
+    // 2. While paused, store_payment_reference returns SettlementError::Paused.
+    let reference = soroban_sdk::BytesN::from_array(&env, &[1u8; 32]);
+    let amount = 1_000i128;
+    let payment_err = client.try_store_payment_reference(&merchant, &reference, &amount);
+    assert_eq!(
+        payment_err.unwrap_err().unwrap(),
+        soroban_sdk::Error::from_contract_error(SettlementError::Paused as u32),
+        "store_payment_reference while paused must fail with SettlementError::Paused"
+    );
+    assert_eq!(SettlementError::Paused as u32, 5);
+
+    // 3. Upgrade succeeds while paused and emits contract_upgraded.
+    assert_eq!(
+        count_events(bettapay_common::events::CONTRACT_UPGRADED_EVENT),
+        0
+    );
+
+    let good_wasm = soroban_sdk::Bytes::from_slice(
+        &env,
+        include_bytes!("../../../target/wasm32-unknown-unknown/release/settlement_contract.wasm"),
+    );
+    let new_wasm_hash = env.deployer().upload_contract_wasm(good_wasm);
+
+    let upgrade_res = client.try_upgrade(&admins, &new_wasm_hash);
+    assert!(
+        upgrade_res.is_ok(),
+        "upgrade must succeed while the contract is paused"
+    );
+    assert_eq!(
+        count_events(bettapay_common::events::CONTRACT_UPGRADED_EVENT),
+        1,
+        "contract_upgraded event must be emitted on upgrade"
+    );
+
+    // Contract remains paused after the upgrade.
+    assert!(client.is_paused(), "contract must remain paused after upgrade");
+
+    // 4. Unpause restores payment processing (no AlreadyUnpaused raised).
+    let unpause_res = client.try_unpause(&admins);
+    assert!(unpause_res.is_ok(), "unpause must succeed without error");
+    assert!(!client.is_paused(), "is_paused must reflect false after unpause");
+
+    // 5. After unpause, the exact same payment call succeeds.
+    let split = client.store_payment_reference(&merchant, &reference, &amount);
+    assert!(
+        split.merchant_payout_amount > 0,
+        "payment processing must succeed after unpause"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // change_threshold
 // ---------------------------------------------------------------------------
@@ -965,6 +1046,213 @@ fn change_threshold_above_admin_count_rejects_with_invalid_threshold() {
 
     // Threshold 3 > admins.len() 2 — must fail with InvalidThreshold, not auth.
     client.change_threshold(&admins, &3);
+}
+
+// Issue #904: multisig threshold larger than admin set is rejected as
+// `InvalidThreshold` (#14) rather than `Unauthorized` (#3) at init, transfer_admin,
+// and schedule time. Admin and Threshold storage entries must remain unchanged.
+#[test]
+fn threshold_above_admin_count_rejects_with_invalid_threshold() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let a1 = Address::generate(&env);
+    let single_admin = soroban_sdk::vec![&env, a1.clone()];
+    let recovery = Address::generate(&env);
+    let governance = register_governance(&env);
+    let contract_id = env.register_contract(None, SettlementContract);
+    let client = SettlementContractClient::new(&env, &contract_id);
+    let deployer = Address::generate(&env);
+
+    // 1. init with one admin and threshold 2 returns SettlementError::InvalidThreshold.
+    let init_err = client
+        .try_init(&deployer, &single_admin, &2, &governance, &recovery)
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(
+        init_err,
+        soroban_sdk::Error::from_contract_error(SettlementError::InvalidThreshold as u32)
+    );
+    assert_eq!(SettlementError::InvalidThreshold as u32, 14);
+
+    // No Admin or Threshold storage entry is written on rejection.
+    env.as_contract(&client.address, || {
+        assert!(!env.storage().instance().has(&DataKey::Admin));
+        assert!(!env.storage().instance().has(&CommonDataKey::Threshold));
+    });
+
+    // Initialize properly with 2 admins and threshold 2.
+    let a2 = Address::generate(&env);
+    let initial_admins = soroban_sdk::vec![&env, a1.clone(), a2.clone()];
+    let initial_threshold = 2u32;
+    client.init(
+        &deployer,
+        &initial_admins,
+        &initial_threshold,
+        &governance,
+        &recovery,
+    );
+    assert_eq!(client.get_admin(), initial_admins);
+    assert_eq!(client.get_threshold(), initial_threshold);
+
+    // 2. transfer_admin with an oversized threshold returns InvalidThreshold.
+    let target1 = Address::generate(&env);
+    let target2 = Address::generate(&env);
+    let new_admins = soroban_sdk::vec![&env, target1.clone(), target2.clone()]; // len 2
+    let oversized_threshold = 3u32; // 3 > 2
+
+    let transfer_err = client
+        .try_transfer_admin(&initial_admins, &new_admins, &oversized_threshold)
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(
+        transfer_err,
+        soroban_sdk::Error::from_contract_error(SettlementError::InvalidThreshold as u32)
+    );
+
+    // The Admin and Threshold instance entries are unchanged after rejection.
+    assert_eq!(client.get_admin(), initial_admins);
+    assert_eq!(client.get_threshold(), initial_threshold);
+    env.as_contract(&client.address, || {
+        assert_eq!(
+            env.storage().instance().get(&DataKey::Admin),
+            Some(initial_admins.clone())
+        );
+        assert_eq!(
+            env.storage().instance().get(&CommonDataKey::Threshold),
+            Some(initial_threshold)
+        );
+    });
+
+    // 3. schedule of a TransferAdmin operation with an oversized threshold returns InvalidThreshold.
+    let op = Operation::TransferAdmin(new_admins.clone(), oversized_threshold);
+    let schedule_err = client
+        .try_schedule(&initial_admins, &op, &DEFAULT_TIMELOCK_DELAY_SECONDS)
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(
+        schedule_err,
+        soroban_sdk::Error::from_contract_error(SettlementError::InvalidThreshold as u32)
+    );
+
+    // The Admin and Threshold instance entries are unchanged after rejection.
+    assert_eq!(client.get_admin(), initial_admins);
+    assert_eq!(client.get_threshold(), initial_threshold);
+    env.as_contract(&client.address, || {
+        assert_eq!(
+            env.storage().instance().get(&DataKey::Admin),
+            Some(initial_admins.clone())
+        );
+        assert_eq!(
+            env.storage().instance().get(&CommonDataKey::Threshold),
+            Some(initial_threshold)
+        );
+    });
+}
+
+// Issue #904: init with one admin and threshold 2 returns SettlementError::InvalidThreshold
+// and leaves Admin and Threshold instance storage unset.
+#[test]
+fn init_threshold_above_admin_count_rejects_with_invalid_threshold() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let admins = soroban_sdk::vec![&env, admin];
+    let recovery = Address::generate(&env);
+    let governance = register_governance(&env);
+    let contract_id = env.register_contract(None, SettlementContract);
+    let client = SettlementContractClient::new(&env, &contract_id);
+    let deployer = Address::generate(&env);
+
+    let res = client.try_init(&deployer, &admins, &2, &governance, &recovery);
+    assert_eq!(
+        res.unwrap_err().unwrap(),
+        soroban_sdk::Error::from_contract_error(SettlementError::InvalidThreshold as u32)
+    );
+    assert_eq!(SettlementError::InvalidThreshold as u32, 14);
+
+    env.as_contract(&client.address, || {
+        assert!(!env.storage().instance().has(&DataKey::Admin));
+        assert!(!env.storage().instance().has(&CommonDataKey::Threshold));
+    });
+}
+
+// Issue #904: transfer_admin with threshold greater than new_admins.len() returns
+// InvalidThreshold and leaves Admin and Threshold instance storage unchanged.
+#[test]
+fn transfer_admin_oversized_threshold_rejects_with_invalid_threshold() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let a1 = Address::generate(&env);
+    let a2 = Address::generate(&env);
+    let admins = soroban_sdk::vec![&env, a1.clone(), a2.clone()];
+    let recovery = Address::generate(&env);
+    let governance = register_governance(&env);
+    let contract_id = env.register_contract(None, SettlementContract);
+    let client = SettlementContractClient::new(&env, &contract_id);
+    let deployer = Address::generate(&env);
+    client.init(&deployer, &admins, &2, &governance, &recovery);
+
+    let target1 = Address::generate(&env);
+    let target2 = Address::generate(&env);
+    let new_admins = soroban_sdk::vec![&env, target1, target2];
+    let oversized_threshold = 3u32;
+
+    let res = client.try_transfer_admin(&admins, &new_admins, &oversized_threshold);
+    assert_eq!(
+        res.unwrap_err().unwrap(),
+        soroban_sdk::Error::from_contract_error(SettlementError::InvalidThreshold as u32)
+    );
+    assert_eq!(SettlementError::InvalidThreshold as u32, 14);
+
+    assert_eq!(client.get_admin(), admins);
+    assert_eq!(client.get_threshold(), 2);
+    env.as_contract(&client.address, || {
+        assert_eq!(env.storage().instance().get(&DataKey::Admin), Some(admins));
+        assert_eq!(
+            env.storage().instance().get(&CommonDataKey::Threshold),
+            Some(2u32)
+        );
+    });
+}
+
+// Issue #904: schedule of Operation::TransferAdmin with threshold greater than
+// new_admins.len() returns InvalidThreshold and leaves Admin and Threshold instance storage unchanged.
+#[test]
+fn schedule_transfer_admin_oversized_threshold_rejects_with_invalid_threshold() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let a1 = Address::generate(&env);
+    let a2 = Address::generate(&env);
+    let admins = soroban_sdk::vec![&env, a1.clone(), a2.clone()];
+    let recovery = Address::generate(&env);
+    let governance = register_governance(&env);
+    let contract_id = env.register_contract(None, SettlementContract);
+    let client = SettlementContractClient::new(&env, &contract_id);
+    let deployer = Address::generate(&env);
+    client.init(&deployer, &admins, &2, &governance, &recovery);
+
+    let target1 = Address::generate(&env);
+    let target2 = Address::generate(&env);
+    let new_admins = soroban_sdk::vec![&env, target1, target2];
+    let oversized_threshold = 3u32;
+
+    let op = Operation::TransferAdmin(new_admins, oversized_threshold);
+    let res = client.try_schedule(&admins, &op, &DEFAULT_TIMELOCK_DELAY_SECONDS);
+    assert_eq!(
+        res.unwrap_err().unwrap(),
+        soroban_sdk::Error::from_contract_error(SettlementError::InvalidThreshold as u32)
+    );
+    assert_eq!(SettlementError::InvalidThreshold as u32, 14);
+
+    assert_eq!(client.get_admin(), admins);
+    assert_eq!(client.get_threshold(), 2);
+    env.as_contract(&client.address, || {
+        assert_eq!(env.storage().instance().get(&DataKey::Admin), Some(admins));
+        assert_eq!(
+            env.storage().instance().get(&CommonDataKey::Threshold),
+            Some(2u32)
+        );
+    });
 }
 
 // Issue #565: threshold == 0 must also be rejected before the auth gate.
@@ -1123,6 +1411,109 @@ fn execute_recovery_rejects_before_delay() {
     client.execute_recovery();
 }
 
+// Issue #909: execute_recovery before the delay elapses fails with RecoveryDelayActive
+// and preserves the pending record, while execution at or after the delay succeeds,
+// installs the new admin with threshold 1, emits recovery_executed once, and consumes
+// the pending record so a subsequent execute_recovery returns RecoveryNotPending.
+#[test]
+fn execute_recovery_before_delay_rejects_and_preserves_record() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let old_admin = Address::generate(&env);
+    let recovery_address = Address::generate(&env);
+    let new_admin = Address::generate(&env);
+    let governance = register_governance(&env);
+    let contract_id = env.register_contract(None, SettlementContract);
+    let client = SettlementContractClient::new(&env, &contract_id);
+    let admins = soroban_sdk::vec![&env, old_admin.clone()];
+    let deployer = Address::generate(&env);
+    client.init(&deployer, &admins, &1, &governance, &recovery_address);
+
+    let count_events = |topic: &str| -> u32 {
+        let events = env.events().all();
+        let sym = Symbol::new(&env, topic);
+        let mut count = 0;
+        for i in 0..events.len() {
+            let (_, topics, _) = events.get(i).unwrap();
+            if !topics.is_empty() && Symbol::from_val(&env, &topics.get(0).unwrap()) == sym {
+                count += 1;
+            }
+        }
+        count
+    };
+
+    let t0 = env.ledger().timestamp();
+    client.initiate_recovery(&new_admin);
+
+    let expected_execute_after = t0 + RECOVERY_DELAY_SECONDS;
+
+    // 1. At a timestamp less than execute_after, execute_recovery returns SettlementError::RecoveryDelayActive.
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp = expected_execute_after - 1);
+    let early_res = client.try_execute_recovery();
+    assert_eq!(
+        early_res.unwrap_err().unwrap(),
+        soroban_sdk::Error::from_contract_error(SettlementError::RecoveryDelayActive as u32),
+        "execute_recovery before execute_after must fail with RecoveryDelayActive"
+    );
+    assert_eq!(SettlementError::RecoveryDelayActive as u32, 9);
+
+    // 2. read_pending_recovery still returns the record after the early failure.
+    let pending_record = env.as_contract(&client.address, || {
+        crate::storage::read_pending_recovery(&env)
+    });
+    assert_eq!(
+        pending_record.new_admin, new_admin,
+        "read_pending_recovery must return the new admin after early call failure"
+    );
+    assert_eq!(
+        pending_record.execute_after, expected_execute_after,
+        "read_pending_recovery must return the expected execute_after after early call failure"
+    );
+    assert_eq!(
+        pending_record.initiated_by, recovery_address,
+        "read_pending_recovery must preserve initiated_by after early call failure"
+    );
+
+    // Ensure recovery_executed has not been emitted yet.
+    assert_eq!(
+        count_events(bettapay_common::events::RECOVERY_EXECUTED_EVENT),
+        0
+    );
+
+    // 3. At a timestamp equal to execute_after, execute_recovery succeeds and updates the admin set.
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp = expected_execute_after);
+    client.execute_recovery();
+
+    assert_eq!(
+        client.get_admin(),
+        soroban_sdk::vec![&env, new_admin.clone()],
+        "admin set must be updated to the new recovery target"
+    );
+    assert_eq!(
+        client.get_threshold(),
+        1,
+        "recovery path must install the admin set with threshold 1"
+    );
+
+    // 4. A second execute_recovery returns SettlementError::RecoveryNotPending.
+    let second_res = client.try_execute_recovery();
+    assert_eq!(
+        second_res.unwrap_err().unwrap(),
+        soroban_sdk::Error::from_contract_error(SettlementError::RecoveryNotPending as u32),
+        "second execute_recovery must return RecoveryNotPending"
+    );
+    assert_eq!(SettlementError::RecoveryNotPending as u32, 8);
+
+    // 5. recovery_executed is emitted exactly once on the successful call.
+    assert_eq!(
+        count_events(bettapay_common::events::RECOVERY_EXECUTED_EVENT),
+        1,
+        "recovery_executed must be emitted exactly once on successful execution"
+    );
+}
+
 #[test]
 fn execute_recovery_clears_pending_record() {
     let env = Env::default();
@@ -1192,6 +1583,138 @@ fn execute_recovery_after_cancel_panics() {
     env.ledger()
         .with_mut(|ledger| ledger.timestamp += RECOVERY_DELAY_SECONDS);
     client.execute_recovery();
+}
+
+// Issue #908: cancel then re-initiate recovery.
+// Proves that a cancelled recovery leaves no residue in storage, a fresh initiation
+// succeeds with its own 7-day delay, execution before the new delay fails with
+// RecoveryDelayActive, execution at or after delay applies the new admin, and
+// recovery_initiated / recovery_cancelled events are emitted once per transition.
+#[test]
+fn cancel_then_reinitiate_recovery() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let recovery_address = Address::generate(&env);
+    let target1 = Address::generate(&env);
+    let target2 = Address::generate(&env);
+    let governance = register_governance(&env);
+    let contract_id = env.register_contract(None, SettlementContract);
+    let client = SettlementContractClient::new(&env, &contract_id);
+    let admins = soroban_sdk::vec![&env, admin.clone()];
+    let deployer = Address::generate(&env);
+    client.init(&deployer, &admins, &1, &governance, &recovery_address);
+
+    let count_events = |topic: &str| -> u32 {
+        let events = env.events().all();
+        let sym = Symbol::new(&env, topic);
+        let mut count = 0;
+        for i in 0..events.len() {
+            let (_, topics, _) = events.get(i).unwrap();
+            if !topics.is_empty() && Symbol::from_val(&env, &topics.get(0).unwrap()) == sym {
+                count += 1;
+            }
+        }
+        count
+    };
+
+    // Initial state: no recovery events yet.
+    assert_eq!(
+        count_events(bettapay_common::events::RECOVERY_INITIATED_EVENT),
+        0
+    );
+    assert_eq!(
+        count_events(bettapay_common::events::RECOVERY_CANCELLED_EVENT),
+        0
+    );
+
+    // 1. First initiation.
+    client.initiate_recovery(&target1);
+    assert_eq!(
+        count_events(bettapay_common::events::RECOVERY_INITIATED_EVENT),
+        1,
+        "recovery_initiated must be emitted once on first initiation"
+    );
+
+    // 2. Cancellation.
+    client.cancel_recovery(&admins);
+    assert_eq!(
+        count_events(bettapay_common::events::RECOVERY_CANCELLED_EVENT),
+        1,
+        "recovery_cancelled must be emitted once on cancellation"
+    );
+
+    // Acceptance criteria 1: PendingRecovery is absent from instance storage.
+    let pending_after_cancel: Option<PendingRecovery> = env.as_contract(&client.address, || {
+        env.storage()
+            .instance()
+            .get(&CommonDataKey::PendingRecovery)
+    });
+    assert!(
+        pending_after_cancel.is_none(),
+        "PendingRecovery must be absent from instance storage after cancellation"
+    );
+
+    // Advance time slightly to distinguish initiation timestamps.
+    env.ledger().with_mut(|l| l.timestamp += 100);
+    let t1 = env.ledger().timestamp();
+
+    // Acceptance criteria 2: A second initiate_recovery is accepted and writes a new pending record.
+    client.initiate_recovery(&target2);
+    assert_eq!(
+        count_events(bettapay_common::events::RECOVERY_INITIATED_EVENT),
+        2,
+        "recovery_initiated must be emitted once per initiation transition"
+    );
+
+    let pending_second: Option<PendingRecovery> = env.as_contract(&client.address, || {
+        env.storage()
+            .instance()
+            .get(&CommonDataKey::PendingRecovery)
+    });
+    assert!(
+        pending_second.is_some(),
+        "second initiate_recovery must write a new pending record"
+    );
+    let record2 = pending_second.unwrap();
+    assert_eq!(record2.new_admin, target2);
+    assert_eq!(
+        record2.execute_after,
+        t1 + RECOVERY_DELAY_SECONDS,
+        "new execute_after must equal initiation timestamp plus RECOVERY_DELAY_SECONDS"
+    );
+
+    // Acceptance criteria 3: execute_recovery before the new execute_after returns RecoveryDelayActive.
+    env.ledger()
+        .with_mut(|l| l.timestamp = record2.execute_after - 1);
+    let premature_exec = client.try_execute_recovery();
+    assert_eq!(
+        premature_exec.unwrap_err().unwrap(),
+        soroban_sdk::Error::from_contract_error(SettlementError::RecoveryDelayActive as u32),
+        "execute_recovery before new execute_after must fail with RecoveryDelayActive"
+    );
+
+    // Acceptance criteria 4: execute_recovery at or after the new delay advances the admin set.
+    env.ledger()
+        .with_mut(|l| l.timestamp = record2.execute_after);
+    client.execute_recovery();
+
+    assert_eq!(
+        client.get_admin(),
+        soroban_sdk::vec![&env, target2.clone()],
+        "execute_recovery must advance the admin set to the newly initiated target"
+    );
+    assert_eq!(client.get_threshold(), 1);
+
+    // Acceptance criteria 5: recovery_initiated and recovery_cancelled are each emitted once per transition.
+    assert_eq!(
+        count_events(bettapay_common::events::RECOVERY_INITIATED_EVENT),
+        2
+    );
+    assert_eq!(
+        count_events(bettapay_common::events::RECOVERY_CANCELLED_EVENT),
+        1
+    );
 }
 
 #[test]
@@ -1447,6 +1970,88 @@ fn upgrade_rejects_never_uploaded_wasm_hash() {
     let (env, client, admins, _) = setup();
     let garbage = soroban_sdk::BytesN::from_array(&env, &[0x47u8; 32]);
     client.upgrade(&admins, &garbage);
+}
+
+/// Snapshot of the settlement contract's instance and persistent storage.
+fn storage_snapshot(
+    env: &Env,
+    contract: &Address,
+) -> (
+    soroban_sdk::Map<soroban_sdk::Val, soroban_sdk::Val>,
+    soroban_sdk::Map<soroban_sdk::Val, soroban_sdk::Val>,
+) {
+    use soroban_sdk::testutils::storage::Instance as _;
+    env.as_contract(contract, || {
+        (
+            env.storage().instance().all(),
+            env.storage().persistent().all(),
+        )
+    })
+}
+
+/// Issue #892: a non-zero hash that was never uploaded looks plausible but
+/// references no code. `upgrade` must reject it cleanly before any storage
+/// write or code swap: storage is byte-for-byte unchanged, no
+/// `contract_upgraded` event is emitted, and the running contract still
+/// answers calls. A valid (uploaded, conforming) hash is still accepted.
+///
+/// The rejection surfaces as the host's `Storage`/`MissingValue` error, not
+/// `InvalidWasmInterface`: protocol 21 gives contract code no way to test
+/// whether a Wasm hash exists, so the probe deployment traps first (see
+/// `upgrade_rejects_never_uploaded_wasm_hash` and
+/// `bettapay_common::upgrade::probe_supports_interface`).
+#[test]
+fn upgrade_rejects_non_zero_never_uploaded_hash_without_side_effects() {
+    let (env, client, admins, merchant) = setup();
+    client.register_merchant(&admins, &merchant);
+
+    let garbage = soroban_sdk::BytesN::from_array(&env, &[0x5Au8; 32]);
+    assert_ne!(
+        garbage,
+        soroban_sdk::BytesN::from_array(&env, &[0u8; 32]),
+        "the hash under test must be non-zero"
+    );
+
+    let storage_before = storage_snapshot(&env, &client.address);
+
+    let result = client.try_upgrade(&admins, &garbage);
+    assert!(
+        result.is_err(),
+        "a never-uploaded hash must be rejected before any write"
+    );
+    let upgraded_topic = Symbol::new(&env, bettapay_common::events::CONTRACT_UPGRADED_EVENT);
+    for (_contract, topics, _data) in env.events().all().iter() {
+        assert!(
+            topics.is_empty() || Symbol::from_val(&env, &topics.get(0).unwrap()) != upgraded_topic,
+            "no contract_upgraded event may be emitted on rejection"
+        );
+    }
+
+    assert_eq!(
+        storage_snapshot(&env, &client.address),
+        storage_before,
+        "contract storage must be unchanged after a rejected upgrade"
+    );
+    // The running wasm is untouched: the original code still serves calls.
+    assert_eq!(client.get_admin(), admins);
+    assert!(client.is_merchant_registered(&merchant));
+    assert!(client.supports_interface(&SUPPORTED_INTERFACE_VERSION));
+
+    // A valid uploaded hash is accepted.
+    let good_hash = env
+        .deployer()
+        .upload_contract_wasm(soroban_sdk::Bytes::from_slice(
+            &env,
+            include_bytes!(
+                "../../../target/wasm32-unknown-unknown/release/settlement_contract.wasm"
+            ),
+        ));
+    client.upgrade(&admins, &good_hash);
+    let (_contract, topics, _data) = env.events().all().last().unwrap();
+    assert_eq!(
+        Symbol::from_val(&env, &topics.get(0).unwrap()),
+        upgraded_topic
+    );
 }
 
 // ---------------------------------------------------------------------------

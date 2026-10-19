@@ -402,8 +402,13 @@ fn governance_bypass_enabled(env: &Env, governance: &Address) -> bool {
 /// fallback chain to [`BOOTSTRAP_DEFAULT_RULE`]:
 /// - Governance has no fee configuration yet (`Ok(Ok(None))`).
 /// - The `get_fee_config` call fails — a contract trap, a typed error, or a
-///   host error (issue #741). The payment path degrades gracefully: a broken
-///   governance contract must not brick fallback payments.
+///   host error (issue #741) — and no earlier read has cached a rule. The
+///   payment path degrades gracefully: a broken governance contract must not
+///   brick fallback payments.
+///
+/// Every successful read overwrites `DataKey::CachedGovRule`. When a later
+/// call fails, that cached rule is returned instead of `None`, so payments
+/// keep the last good governance fees through an outage (issue #744).
 ///
 /// The bypass circuit-breaker (issue #743) is checked first: when governance's
 /// `bypass_gov_fees` system parameter is `1`, this returns `None` without
@@ -445,14 +450,16 @@ pub(crate) fn read_governance_fee_rule(env: &Env) -> Option<SettlementRule> {
         return None;
     }
 
-    // Issue #741: the read/payment path degrades to bootstrap on any failure.
+    // Issue #741 / #744: the read/payment path never fails on a governance
+    // outage. It serves the last good cached rule when one exists and
+    // otherwise degrades to bootstrap.
     let raw_val = match env.try_invoke_contract::<Val, SettlementError>(
         &governance,
         &Symbol::new(env, "get_fee_config"),
         Vec::new(env),
     ) {
         Ok(Ok(val)) => val,
-        Ok(Err(_)) | Err(_) => return None,
+        Ok(Err(_)) | Err(_) => return read_cached_governance_fee_rule(env),
     };
 
     let config = try_read_governance_fee_config(env, raw_val)?;
@@ -473,6 +480,16 @@ pub(crate) fn read_governance_fee_rule(env: &Env) -> Option<SettlementRule> {
         .set(&DataKey::CachedGovRule, &Some(rule.clone()));
 
     Some(rule)
+}
+
+/// Returns the last governance-derived rule cached by a successful
+/// [`read_governance_fee_rule`], or `None` when governance has never answered
+/// with a valid config (issue #744).
+fn read_cached_governance_fee_rule(env: &Env) -> Option<SettlementRule> {
+    env.storage()
+        .instance()
+        .get::<_, Option<SettlementRule>>(&DataKey::CachedGovRule)
+        .flatten()
 }
 
 /// Reads the minimum payment amount from the governance contract's system
@@ -663,7 +680,7 @@ pub(crate) fn validate_fee_against_governance(env: &Env, rule: &SettlementRule) 
     {
         env.events().publish(
             (
-                Symbol::new(env, "fee_ceiling_rejected"),
+                Symbol::new(env, bettapay_common::events::FEE_CEILING_REJECTED_EVENT),
                 rule.platform_fee_bps,
             ),
             rule.network_fee_bps,

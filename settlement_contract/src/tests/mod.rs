@@ -7,6 +7,7 @@
 pub mod admin_tests;
 pub mod conformity_tests;
 pub mod event_topic_conformity_tests;
+pub mod event_topic_registry_tests;
 pub mod fee_bounds_parity_tests;
 pub mod fee_config_ordering_tests;
 pub mod governance_error_tests;
@@ -56,4 +57,19 @@ pub fn setup() -> (
     let deployer = Address::generate(&env);
     client.init(&deployer, &admins, &1, &governance, &recovery_address);
     (env, client, admins, merchant)
+}
+
+/// Asserts two rules are equal field by field. `SettlementRule` derives
+/// neither `PartialEq` nor `Debug`, so the fields are compared as a tuple to
+/// get a readable diff on failure.
+pub fn assert_rule_eq(actual: &SettlementRule, expected: &SettlementRule, context: &str) {
+    let fields = |r: &SettlementRule| {
+        (
+            r.platform_fee_bps,
+            r.network_fee_bps,
+            r.settlement_delay_ledger,
+            r.auto_settle,
+        )
+    };
+    assert_eq!(fields(actual), fields(expected), "{context}");
 }

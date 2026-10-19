@@ -3,7 +3,9 @@ use soroban_sdk::{contractimpl, panic_with_error, Address, BytesN, Env, Map, Sym
 
 use bettapay_common::upgrade::probe_supports_interface;
 use bettapay_common::{
-    constants::{BPS_DENOMINATOR, MAX_FEE_BPS, MIN_FEE_BPS, RECOVERY_DELAY_SECONDS},
+    constants::{
+        BPS_DENOMINATOR, MAX_FEE_BPS, MAX_PAUSE_REASON, MIN_FEE_BPS, RECOVERY_DELAY_SECONDS,
+    },
     events::{self, AdminTransferred, PendingRecovery},
     storage::{self, CommonDataKey},
 };
@@ -11,9 +13,10 @@ use bettapay_common::{
 use crate::errors::SettlementError;
 use crate::policy::{
     BOOTSTRAP_DEFAULT_RULE, CURRENT_SCHEMA_VERSION, DEFAULT_TIMELOCK_DELAY_SECONDS,
-    MAX_CANCEL_ALL_BATCH, MAX_SETTLEMENT_DELAY_LEDGER, MERCHANT_TTL_BUMP, MERCHANT_TTL_THRESHOLD,
-    MIN_TIMELOCK_DELAY_SECONDS, RULE_TTL_BUMP, RULE_TTL_THRESHOLD, SCHEDULED_OP_TTL_BUMP,
-    SCHEDULED_OP_TTL_THRESHOLD, SUPPORTED_INTERFACE_VERSION,
+    MAX_SCHEDULED_OPERATION_PAYLOAD_LEN, MAX_SETTLEMENT_DELAY_LEDGER, MAX_TIMELOCK_DELAY_SECONDS,
+    MERCHANT_TTL_BUMP, MERCHANT_TTL_THRESHOLD, MIN_TIMELOCK_DELAY_SECONDS, RULE_TTL_BUMP,
+    RULE_TTL_THRESHOLD, SCHEDULED_OP_TTL_BUMP, SCHEDULED_OP_TTL_THRESHOLD,
+    SUPPORTED_INTERFACE_VERSION,
 };
 use crate::storage::{
     assert_admin_and_not_paused, assert_governance_reachable, assert_not_paused,
@@ -415,13 +418,24 @@ impl SettlementContract {
         env.deployer().update_current_contract_wasm(new_wasm_hash);
     }
 
-    pub fn pause(env: Env, signers: Vec<Address>) {
+    /// Pauses the contract, carrying a bounded machine-readable reason code
+    /// (issue #991) so incidents carry an auditable cause.
+    ///
+    /// # Panics
+    ///
+    /// * [`AlreadyPaused`](SettlementError::AlreadyPaused) — if the contract is already paused.
+    /// * [`InvalidPauseReason`](SettlementError::InvalidPauseReason) — if `reason` exceeds
+    ///   `bettapay_common::constants::MAX_PAUSE_REASON`.
+    pub fn pause(env: Env, signers: Vec<Address>, reason: u32) {
         verify_admin_auth(&env, &signers, read_threshold(&env));
         if storage::is_paused(&env) {
             panic_with_error!(&env, SettlementError::AlreadyPaused);
         }
+        if reason > MAX_PAUSE_REASON {
+            panic_with_error!(&env, SettlementError::InvalidPauseReason);
+        }
         let admin = signers.get(0).unwrap();
-        storage::apply_pause(&env, &admin);
+        storage::apply_pause(&env, &admin, reason);
     }
 
     pub fn unpause(env: Env, signers: Vec<Address>) {
@@ -480,6 +494,10 @@ impl SettlementContract {
     /// * [`Paused`](SettlementError::Paused) — if the contract is currently paused.
     /// * [`Unauthorized`](SettlementError::Unauthorized) — if signers lack admin authority.
     /// * [`ExecutionNotReady`](SettlementError::ExecutionNotReady) — if `execute_in` is less than `MIN_TIMELOCK_DELAY_SECONDS`.
+    /// * [`ExecutionDelayTooLong`](SettlementError::ExecutionDelayTooLong) — if `execute_in` exceeds
+    ///   `MAX_TIMELOCK_DELAY_SECONDS` (issue #992).
+    /// * [`PayloadTooLarge`](SettlementError::PayloadTooLarge) — if the operation's encoded
+    ///   XDR size exceeds `MAX_SCHEDULED_OPERATION_PAYLOAD_LEN` (issue #993).
     /// * [`GovernanceCallFailed`](SettlementError::GovernanceCallFailed) — if the governance
     ///   liveness probe (`get_fee_config`) fails (issue #994). Nothing is written.
     /// * [`OperationAlreadyScheduled`](SettlementError::OperationAlreadyScheduled) — if the operation is already in the queue.
@@ -489,6 +507,12 @@ impl SettlementContract {
 
         if execute_in < MIN_TIMELOCK_DELAY_SECONDS {
             panic_with_error!(&env, SettlementError::ExecutionNotReady);
+        }
+        // Issue #992: cap the delay so a scheduled slot cannot be locked
+        // arbitrarily far into the future, past the window the scheduled
+        // entry's TTL keeps it alive for.
+        if execute_in > MAX_TIMELOCK_DELAY_SECONDS {
+            panic_with_error!(&env, SettlementError::ExecutionDelayTooLong);
         }
 
         // Validate scheduled operation bounds at schedule time (issues #810, #811)
@@ -503,12 +527,19 @@ impl SettlementContract {
             }
         }
 
+        let operation_xdr = operation.clone().to_xdr(&env);
+        // Issue #993: cap the encoded operation size before any write so an
+        // oversized payload (e.g. a huge TransferAdmin set) cannot bloat
+        // persistent storage under the operation hash.
+        if operation_xdr.len() > MAX_SCHEDULED_OPERATION_PAYLOAD_LEN {
+            panic_with_error!(&env, SettlementError::PayloadTooLarge);
+        }
+
         // Issue #994: probe governance before anything is written so an
         // unreachable governance surfaces as `GovernanceCallFailed` now,
         // rather than leaving operators with a stuck queue later.
         assert_governance_reachable(&env);
 
-        let operation_xdr = operation.clone().to_xdr(&env);
         let op_hash: BytesN<32> = env.crypto().sha256(&operation_xdr).into();
         let key = DataKey::ScheduledOperation(op_hash.clone());
 

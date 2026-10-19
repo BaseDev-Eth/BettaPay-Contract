@@ -9,10 +9,10 @@
 //! happens to occur.
 
 use soroban_sdk::testutils::storage::{Instance as _, Persistent as _};
-use soroban_sdk::testutils::{Address as _, Ledger as _};
-use soroban_sdk::{Address, BytesN, Env, Error};
+use soroban_sdk::testutils::{Address as _, Events as _, Ledger as _};
+use soroban_sdk::{Address, BytesN, Env, Error, FromVal, Symbol, TryFromVal};
 
-use bettapay_common::events::PendingRecovery;
+use bettapay_common::events::{self, PendingRecovery};
 use bettapay_common::storage::CommonDataKey;
 
 use crate::storage::{read_pending_recovery, read_threshold};
@@ -439,4 +439,199 @@ fn default_rule_survives_long_idle() {
         retrieved.auto_settle, rule.auto_settle,
         "auto_settle should match after long idle"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Issue #897: payment tombstone after unregister
+// ---------------------------------------------------------------------------
+
+/// Unregistering a merchant orphans its payment history without deleting it.
+///
+/// TTL window: `unregister_merchant` writes a `DataKey::ArchivedMerchant`
+/// tombstone with the merchant TTL policy (`MERCHANT_TTL_BUMP`), while each
+/// `DataKey::Payment` entry keeps its own, independent payment TTL. For as long
+/// as the tombstone is live (i.e. until the merchant is re-registered), every
+/// payment read for that merchant fails with `PaymentOrphaned` and — because
+/// the read fails — never bumps the payment entry's TTL. The entry itself stays
+/// in storage until an admin prunes it or its own TTL lapses.
+/// Re-registration removes the tombstone (issue #685).
+#[test]
+fn unregister_orphans_payments_until_reregistration_clears_tombstone() {
+    let (env, client, admins, merchant) = setup();
+    let no_signers = soroban_sdk::vec![&env];
+    client.register_merchant(&admins, &merchant);
+
+    let kept = BytesN::<32>::from_array(&env, &[7u8; 32]);
+    let pruned = BytesN::<32>::from_array(&env, &[8u8; 32]);
+    client.store_payment_reference(&merchant, &kept, &1_000);
+    client.store_payment_reference(&merchant, &pruned, &2_000);
+
+    client.unregister_merchant(&admins, &merchant);
+
+    let archived_key = DataKey::ArchivedMerchant(merchant.clone());
+    let kept_key = DataKey::Payment(merchant.clone(), kept.clone());
+    let pruned_key = DataKey::Payment(merchant.clone(), pruned.clone());
+    let has =
+        |key: &DataKey| env.as_contract(&client.address, || env.storage().persistent().has(key));
+    let ttl = |key: &DataKey| {
+        env.as_contract(&client.address, || env.storage().persistent().get_ttl(key))
+    };
+
+    // The tombstone is live for the merchant TTL window.
+    assert!(has(&archived_key), "unregister must write the tombstone");
+    assert_eq!(ttl(&archived_key), MERCHANT_TTL_BUMP);
+
+    // Reads fail with PaymentOrphaned on both the merchant and admin paths.
+    let orphaned = Error::from(SettlementError::PaymentOrphaned);
+    let kept_ttl_before = ttl(&kept_key);
+    assert_eq!(
+        client
+            .try_get_payment_reference(&merchant, &kept, &no_signers)
+            .err(),
+        Some(Ok(orphaned))
+    );
+    assert_eq!(
+        client
+            .try_get_payment_reference(&merchant, &kept, &admins)
+            .err(),
+        Some(Ok(orphaned))
+    );
+    let refs = soroban_sdk::vec![&env, kept.clone(), pruned.clone()];
+    assert_eq!(
+        client
+            .try_get_payments(&merchant, &refs, &0, &no_signers)
+            .err(),
+        Some(Ok(orphaned))
+    );
+    assert_eq!(
+        client.try_get_payments(&merchant, &refs, &0, &admins).err(),
+        Some(Ok(orphaned))
+    );
+
+    // Auth still gates reads: without the merchant's authorization the call
+    // fails on auth before the orphan check, so orphan status isn't leaked.
+    env.set_auths(&[]);
+    let unauthenticated = client
+        .try_get_payment_reference(&merchant, &kept, &no_signers)
+        .err()
+        .expect("read without merchant auth must fail");
+    assert_ne!(unauthenticated, Ok(orphaned));
+    env.mock_all_auths();
+
+    // The stored entries survive the unregister and the failed reads, with
+    // their TTL untouched, until pruned.
+    assert!(has(&kept_key), "unregister must not delete payment records");
+    assert!(
+        has(&pruned_key),
+        "unregister must not delete payment records"
+    );
+    assert_eq!(ttl(&kept_key), kept_ttl_before);
+
+    client.prune_payment(&admins, &merchant, &pruned);
+    assert!(!has(&pruned_key), "prune removes the orphaned entry");
+    assert!(has(&kept_key), "unpruned entries remain stored");
+
+    // Re-registration clears the tombstone and new records are readable.
+    client.register_merchant(&admins, &merchant);
+    assert!(
+        !has(&archived_key),
+        "re-registration must clear the tombstone"
+    );
+
+    let fresh = BytesN::<32>::from_array(&env, &[9u8; 32]);
+    client.store_payment_reference(&merchant, &fresh, &3_000);
+    let record = client
+        .get_payment_reference(&merchant, &fresh, &no_signers)
+        .expect("new record must be readable after re-registration");
+    assert_eq!(record.amount, 3_000);
+
+    // The tombstone is per merchant, not per record: the unpruned entry from
+    // the earlier registration is readable again, and the pruned one is gone.
+    let refs = soroban_sdk::vec![&env, kept.clone(), pruned.clone(), fresh.clone()];
+    let page = client.get_payments(&merchant, &refs, &0, &no_signers);
+    assert_eq!(page.records.len(), 2);
+    assert_eq!(page.records.get(0).unwrap().amount, 1_000);
+    assert_eq!(page.records.get(1).unwrap().amount, 3_000);
+}
+
+// ---------------------------------------------------------------------------
+// Issue #898: re-registration does not resurrect the merchant rule
+// ---------------------------------------------------------------------------
+
+/// `unregister_merchant` removes the merchant-specific rule and emits
+/// `settlement_rule_cleared` with the canonical `(admin, removed, fallback)`
+/// payload. Re-registering the merchant must not bring that rule back: the
+/// effective rule resolves through the fallback chain to the global default.
+#[test]
+fn reregistration_falls_back_to_default_rule_not_old_merchant_rule() {
+    let (env, client, admins, merchant) = setup();
+    client.register_merchant(&admins, &merchant);
+
+    // Distinct from both the merchant rule and BOOTSTRAP_DEFAULT_RULE so the
+    // fallback is unambiguous.
+    let default_rule = make_rule(150, 30, 10);
+    let merchant_rule = make_rule(250, 50, 20);
+    client.set_default_rule(&admins, &default_rule);
+    client.set_settlement_rule(&admins, &merchant, &merchant_rule);
+
+    let rule_key = DataKey::Rule(merchant.clone());
+    let has_rule = || {
+        env.as_contract(&client.address, || {
+            env.storage().persistent().has(&rule_key)
+        })
+    };
+    assert!(has_rule());
+    assert!(rules_equal(
+        &client.get_effective_rule(&merchant),
+        &merchant_rule
+    ));
+
+    client.unregister_merchant(&admins, &merchant);
+    assert!(!has_rule(), "unregister must remove DataKey::Rule");
+
+    // settlement_rule_cleared: topics (name, merchant), data
+    // (admin, removed, fallback) with the default rule as the fallback.
+    let cleared_topic = Symbol::new(&env, events::SETTLEMENT_RULE_CLEARED_EVENT);
+    let all = env.events().all();
+    let mut cleared = None;
+    for i in 0..all.len() {
+        let (contract, topics, data) = all.get(i).unwrap();
+        if contract == client.address
+            && Symbol::from_val(&env, &topics.get(0).unwrap()) == cleared_topic
+        {
+            assert!(cleared.is_none(), "settlement_rule_cleared emitted once");
+            assert_eq!(topics.len(), 2);
+            assert_eq!(Address::from_val(&env, &topics.get(1).unwrap()), merchant);
+            cleared = Some(data);
+        }
+    }
+    let data = cleared.expect("unregister must emit settlement_rule_cleared");
+    let (admin, removed, fallback): (Address, SettlementRule, SettlementRule) =
+        TryFromVal::try_from_val(&env, &data).unwrap();
+    assert_eq!(admin, admins.get(0).unwrap());
+    assert!(rules_equal(&removed, &merchant_rule));
+    assert!(rules_equal(&fallback, &default_rule));
+
+    // Re-register: precedence is merchant rule > default rule > governance >
+    // bootstrap. With no merchant rule stored, the default must win — never
+    // the pre-unregister merchant rule.
+    client.register_merchant(&admins, &merchant);
+    assert!(
+        !has_rule(),
+        "re-registration must not restore DataKey::Rule"
+    );
+
+    let effective = client.get_effective_rule(&merchant);
+    assert!(rules_equal(&effective, &default_rule));
+    assert!(!rules_equal(&effective, &merchant_rule));
+
+    // New payments are priced with the default rule, not the old one.
+    let reference = BytesN::<32>::from_array(&env, &[5u8; 32]);
+    client.store_payment_reference(&merchant, &reference, &10_000);
+    let record = client
+        .get_payment_reference(&merchant, &reference, &soroban_sdk::vec![&env])
+        .unwrap();
+    assert_eq!(record.platform_fee_bps, default_rule.platform_fee_bps);
+    assert_eq!(record.network_fee_bps, default_rule.network_fee_bps);
+    assert!(!has_rule(), "no stale rule written by the payment path");
 }
