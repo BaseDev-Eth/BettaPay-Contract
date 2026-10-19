@@ -1,13 +1,16 @@
-//! TTL-bump behavior tests for ADR 003's per-read instance TTL policy
-//! (`adr/003-ttl-value-selection.md`).
+//! TTL behavior tests for ADR 003's reader policy
+//! (`adr/003-ttl-value-selection.md`), including the entry-point classification
+//! registry that requires every public API method to declare its TTL behavior.
 //!
 //! `read_admins`, `read_governance`, and `read_recovery_address` extend the
 //! shared instance-storage entry's TTL on every read using the
 //! `READ_INSTANCE_TTL_THRESHOLD` / `READ_INSTANCE_TTL_BUMP` policy.
 //! `read_threshold` and `read_pending_recovery` must do the same, so the
 //! entry's lifetime does not depend on which particular instance read
-//! happens to occur.
+//! happens to occur. Public read APIs not classified as keep-alive readers
+//! explicitly declare why they are TTL-neutral.
 
+use alloc::collections::BTreeSet;
 use soroban_sdk::testutils::storage::{Instance as _, Persistent as _};
 use soroban_sdk::testutils::{Address as _, Ledger as _};
 use soroban_sdk::{Address, BytesN, Env, Error};
@@ -18,8 +21,9 @@ use bettapay_common::storage::CommonDataKey;
 use crate::storage::{read_pending_recovery, read_threshold};
 use crate::types::{DataKey, SettlementRule};
 use crate::{
-    SettlementError, MERCHANT_TTL_BUMP, READ_INSTANCE_TTL_BUMP, READ_INSTANCE_TTL_THRESHOLD,
-    RULE_TTL_BUMP, RULE_TTL_THRESHOLD,
+    SettlementError, MERCHANT_TTL_BUMP, MERCHANT_TTL_THRESHOLD, PAYMENT_TTL_BUMP,
+    PAYMENT_TTL_THRESHOLD, READ_INSTANCE_TTL_BUMP, READ_INSTANCE_TTL_THRESHOLD, RULE_TTL_BUMP,
+    RULE_TTL_THRESHOLD,
 };
 
 use super::setup;
@@ -208,6 +212,264 @@ fn make_rule_ttl_stale(env: &Env, contract_address: &Address, merchant: &Address
     env.as_contract(contract_address, || {
         env.storage().persistent().get_ttl(&rule_key)
     })
+}
+
+fn make_payment_ttl_stale(
+    env: &Env,
+    contract_address: &Address,
+    merchant: &Address,
+    reference: &BytesN<32>,
+) -> u32 {
+    let key = DataKey::Payment(merchant.clone(), reference.clone());
+    env.as_contract(contract_address, || {
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, PAYMENT_TTL_BUMP, PAYMENT_TTL_BUMP);
+    });
+    let seq = env.ledger().sequence();
+    env.ledger()
+        .set_sequence_number(seq + (PAYMENT_TTL_BUMP - PAYMENT_TTL_THRESHOLD / 5));
+    env.as_contract(contract_address, || {
+        env.storage().persistent().get_ttl(&key)
+    })
+}
+
+fn make_merchant_ttl_stale(env: &Env, contract_address: &Address, merchant: &Address) -> u32 {
+    let key = DataKey::Merchant(merchant.clone());
+    env.as_contract(contract_address, || {
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, MERCHANT_TTL_BUMP, MERCHANT_TTL_BUMP);
+    });
+    let seq = env.ledger().sequence();
+    env.ledger()
+        .set_sequence_number(seq + (MERCHANT_TTL_BUMP - MERCHANT_TTL_THRESHOLD / 5));
+    env.as_contract(contract_address, || {
+        env.storage().persistent().get_ttl(&key)
+    })
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TtlClassification {
+    InstanceKeepAlive,
+    PersistentKeepAlive,
+    Neutral(&'static str),
+    NotReader,
+}
+
+// Any new public entry point must be added here and classified. Read API
+// neutral entries carry their rationale; mutation paths are recorded so the
+// source inventory detects new public methods regardless of their name.
+const ENTRYPOINT_TTL_CLASSIFICATIONS: &[(&str, TtlClassification)] = &[
+    (
+        "supports_interface",
+        TtlClassification::Neutral("compile-time interface probe"),
+    ),
+    (
+        "version",
+        TtlClassification::Neutral("compile-time schema version"),
+    ),
+    (
+        "get_capabilities",
+        TtlClassification::Neutral("compile-time capability list"),
+    ),
+    ("init", TtlClassification::NotReader),
+    (
+        "is_initialized",
+        TtlClassification::Neutral("initialization probe"),
+    ),
+    ("get_admin", TtlClassification::InstanceKeepAlive),
+    ("get_threshold", TtlClassification::InstanceKeepAlive),
+    ("get_governance", TtlClassification::InstanceKeepAlive),
+    ("get_recovery_address", TtlClassification::InstanceKeepAlive),
+    ("update_governance", TtlClassification::NotReader),
+    ("initiate_recovery", TtlClassification::NotReader),
+    ("cancel_recovery", TtlClassification::NotReader),
+    ("update_recovery_address", TtlClassification::NotReader),
+    ("execute_recovery", TtlClassification::NotReader),
+    ("transfer_admin", TtlClassification::NotReader),
+    ("change_threshold", TtlClassification::NotReader),
+    ("upgrade", TtlClassification::NotReader),
+    ("pause", TtlClassification::NotReader),
+    ("unpause", TtlClassification::NotReader),
+    (
+        "is_paused",
+        TtlClassification::Neutral("pause-state check does not keep the instance alive"),
+    ),
+    ("migrate", TtlClassification::NotReader),
+    ("schedule", TtlClassification::NotReader),
+    ("execute", TtlClassification::NotReader),
+    ("cancel", TtlClassification::NotReader),
+    ("register_merchant", TtlClassification::NotReader),
+    ("unregister_merchant", TtlClassification::NotReader),
+    (
+        "is_merchant_registered",
+        TtlClassification::Neutral("public registry probe does not extend marker TTL"),
+    ),
+    ("set_settlement_rule", TtlClassification::NotReader),
+    ("clear_settlement_rule", TtlClassification::NotReader),
+    ("set_default_rule", TtlClassification::NotReader),
+    (
+        "get_default_rule",
+        TtlClassification::Neutral("configuration lookup is not keep-alive intent"),
+    ),
+    (
+        "get_settlement_rule",
+        TtlClassification::PersistentKeepAlive,
+    ),
+    (
+        "get_settlement_rule_no_bump",
+        TtlClassification::Neutral("explicit no-bump public lookup"),
+    ),
+    (
+        "get_effective_rule",
+        TtlClassification::Neutral("public rule resolution is TTL-neutral"),
+    ),
+    ("store_payment_reference", TtlClassification::NotReader),
+    (
+        "calculate_fee_split",
+        TtlClassification::Neutral("public fee quote is TTL-neutral"),
+    ),
+    ("prune_payment", TtlClassification::NotReader),
+    ("prune_payments", TtlClassification::NotReader),
+    (
+        "get_payment_reference",
+        TtlClassification::PersistentKeepAlive,
+    ),
+    ("get_payments", TtlClassification::PersistentKeepAlive),
+];
+
+#[test]
+fn every_public_entrypoint_has_a_ttl_classification() {
+    let mut classified = BTreeSet::new();
+    for (name, classification) in ENTRYPOINT_TTL_CLASSIFICATIONS {
+        assert!(
+            classified.insert(*name),
+            "duplicate TTL classification for {name}"
+        );
+        if let TtlClassification::Neutral(reason) = classification {
+            assert!(
+                !reason.is_empty(),
+                "TTL-neutral entry point {name} needs a reason"
+            );
+        }
+    }
+
+    let source_entrypoints = [
+        include_str!("../admin.rs"),
+        include_str!("../merchant.rs"),
+        include_str!("../settlement.rs"),
+        include_str!("../payments.rs"),
+    ]
+    .into_iter()
+    .flat_map(str::lines)
+    .filter_map(|line| {
+        line.trim_start()
+            .strip_prefix("pub fn ")
+            .and_then(|signature| signature.split('(').next())
+    })
+    .collect::<BTreeSet<_>>();
+
+    assert_eq!(
+        source_entrypoints, classified,
+        "every public entry point must be added to ENTRYPOINT_TTL_CLASSIFICATIONS; \
+         readers must declare keep-alive or a TTL-neutral exemption"
+    );
+}
+
+#[test]
+fn public_instance_readers_bump_and_neutral_probes_do_not() {
+    let (env, client, _admins, merchant) = setup();
+
+    for (name, read) in [
+        ("get_admin", 0),
+        ("get_threshold", 1),
+        ("get_governance", 2),
+        ("get_recovery_address", 3),
+    ] {
+        make_instance_ttl_stale(&env, &client.address);
+        match read {
+            0 => {
+                client.get_admin();
+            }
+            1 => {
+                client.get_threshold();
+            }
+            2 => {
+                client.get_governance();
+            }
+            _ => {
+                client.get_recovery_address();
+            }
+        }
+        let ttl_after = env.as_contract(&client.address, || env.storage().instance().get_ttl());
+        assert_eq!(
+            ttl_after, READ_INSTANCE_TTL_BUMP,
+            "{name} must bump the shared instance TTL"
+        );
+    }
+
+    make_instance_ttl_stale(&env, &client.address);
+    let ttl_before = env.as_contract(&client.address, || env.storage().instance().get_ttl());
+    client.supports_interface(&1);
+    client.version();
+    client.get_capabilities();
+    client.is_initialized();
+    client.is_paused();
+    client.get_default_rule();
+    let ttl_after = env.as_contract(&client.address, || env.storage().instance().get_ttl());
+    assert_eq!(
+        ttl_after, ttl_before,
+        "compile-time probes and public config reads must be TTL-neutral"
+    );
+
+    client.register_merchant(&_admins, &merchant);
+    let marker_ttl_before = make_merchant_ttl_stale(&env, &client.address, &merchant);
+    assert!(client.is_merchant_registered(&merchant));
+    let marker_ttl_after = env.as_contract(&client.address, || {
+        env.storage()
+            .persistent()
+            .get_ttl(&DataKey::Merchant(merchant.clone()))
+    });
+    assert_eq!(
+        marker_ttl_after, marker_ttl_before,
+        "is_merchant_registered must not extend the merchant marker TTL"
+    );
+}
+
+#[test]
+fn payment_read_entrypoints_bump_the_payment_ttl() {
+    let (env, client, _admins, merchant) = setup();
+    client.register_merchant(&_admins, &merchant);
+    let reference = BytesN::from_array(&env, &[0x71; 32]);
+    client.store_payment_reference(&merchant, &reference, &1_000);
+
+    let before = make_payment_ttl_stale(&env, &client.address, &merchant, &reference);
+    assert!(before < PAYMENT_TTL_THRESHOLD);
+    assert!(client
+        .get_payment_reference(&merchant, &reference, &soroban_sdk::Vec::new(&env))
+        .is_some());
+    let after_single = env.as_contract(&client.address, || {
+        env.storage()
+            .persistent()
+            .get_ttl(&DataKey::Payment(merchant.clone(), reference.clone()))
+    });
+    assert_eq!(after_single, PAYMENT_TTL_BUMP);
+
+    make_payment_ttl_stale(&env, &client.address, &merchant, &reference);
+    let page = client.get_payments(
+        &merchant,
+        &soroban_sdk::vec![&env, reference.clone()],
+        &0,
+        &soroban_sdk::Vec::new(&env),
+    );
+    assert_eq!(page.records.len(), 1);
+    let after_batch = env.as_contract(&client.address, || {
+        env.storage()
+            .persistent()
+            .get_ttl(&DataKey::Payment(merchant, reference))
+    });
+    assert_eq!(after_batch, PAYMENT_TTL_BUMP);
 }
 
 #[test]

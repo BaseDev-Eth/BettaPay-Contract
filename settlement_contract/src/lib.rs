@@ -288,6 +288,9 @@
 
 extern crate alloc;
 
+#[cfg(test)]
+extern crate std;
+
 mod admin;
 mod errors;
 mod merchant;
