@@ -1796,6 +1796,142 @@ fn both_contracts_deployed_together_enforce_governance_fees_on_payment() {
 }
 
 // ---------------------------------------------------------------------------
+// Issue #899: auto_settle round-trip on the default rule
+// ---------------------------------------------------------------------------
+
+/// The `auto_settle` flag on a stored default rule must persist, propagate
+/// through `get_effective_rule` for a merchant with no override, and be
+/// snapshotted onto every `PaymentRecord` written under that rule — for both
+/// `true` and `false`. The `true` leg is what catches a dropped field: a
+/// missing write or read would silently fall back to `false`.
+#[test]
+fn default_rule_auto_settle_round_trips_to_effective_rule_and_payment() {
+    let (env, client, admins, merchant) = super::setup();
+    client.register_merchant(&admins, &merchant);
+
+    // Documented baseline: the bootstrap rule never auto-settles.
+    assert!(!BOOTSTRAP_DEFAULT_RULE.auto_settle);
+    assert!(!client.get_effective_rule(&merchant).auto_settle);
+
+    for (i, auto_settle) in [true, false].into_iter().enumerate() {
+        let rule = SettlementRule {
+            platform_fee_bps: 200,
+            network_fee_bps: 30,
+            settlement_delay_ledger: 12,
+            auto_settle,
+        };
+        client.set_default_rule(&admins, &rule);
+
+        let stored = client
+            .get_default_rule()
+            .expect("default rule must be stored");
+        assert_eq!(stored.auto_settle, auto_settle);
+        super::assert_rule_eq(&stored, &rule, "get_default_rule");
+
+        // No merchant override exists, so the effective rule is the default.
+        assert!(client.get_settlement_rule(&merchant).is_none());
+        assert_eq!(
+            client.get_effective_rule(&merchant).auto_settle,
+            auto_settle
+        );
+
+        let reference = BytesN::<32>::from_array(&env, &[0x90 + i as u8; 32]);
+        client.store_payment_reference(&merchant, &reference, &10_000);
+        let record = client
+            .get_payment_reference(&merchant, &reference, &soroban_sdk::vec![&env])
+            .expect("payment record must exist");
+        assert_eq!(record.auto_settle, auto_settle);
+        assert_eq!(record.settlement_delay_ledger, rule.settlement_delay_ledger);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Issue #900: effective-rule precedence
+// ---------------------------------------------------------------------------
+
+/// Walks every rung of the resolution chain in one environment, configuring
+/// each source in turn: bootstrap → governance fee config → global default →
+/// merchant override, then clears the override to drop back to the default.
+/// At every step `get_effective_rule`, `read_rule_or_default` and
+/// `read_rule_or_default_no_bump` must agree.
+#[test]
+fn effective_rule_precedence_walks_all_four_rungs() {
+    use super::mock_governance::MockGovernanceClient;
+    use crate::storage::{read_rule_or_default, read_rule_or_default_no_bump};
+
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let governance = super::register_governance(&env);
+    let gov = MockGovernanceClient::new(&env, &governance);
+    let admins = soroban_sdk::vec![&env, Address::generate(&env)];
+    let merchant = Address::generate(&env);
+    let contract_id = env.register_contract(None, SettlementContract);
+    let client = SettlementContractClient::new(&env, &contract_id);
+    client.init(
+        &Address::generate(&env),
+        &admins,
+        &1,
+        &governance,
+        &Address::generate(&env),
+    );
+    client.register_merchant(&admins, &merchant);
+
+    let assert_resolves_to = |expected: &SettlementRule, rung: &str| {
+        super::assert_rule_eq(&client.get_effective_rule(&merchant), expected, rung);
+        env.as_contract(&contract_id, || {
+            super::assert_rule_eq(
+                &read_rule_or_default(&env, merchant.clone()),
+                expected,
+                rung,
+            );
+            super::assert_rule_eq(
+                &read_rule_or_default_no_bump(&env, merchant.clone()),
+                expected,
+                rung,
+            );
+        });
+    };
+
+    // Rung 4: nothing configured and governance has no fee config.
+    assert_resolves_to(&BOOTSTRAP_DEFAULT_RULE, "bootstrap");
+
+    // Rung 3: governance fee config only. Timing fields are fixed by design.
+    gov.set_fee_config(&crate::GovFeeConfig {
+        platform_fee_bps: 300,
+        network_fee_bps: 40,
+    });
+    let gov_rule = SettlementRule {
+        platform_fee_bps: 300,
+        network_fee_bps: 40,
+        settlement_delay_ledger: 0,
+        auto_settle: false,
+    };
+    assert_resolves_to(&gov_rule, "governance");
+
+    // Rung 2: a global default outranks governance.
+    let default_rule = SettlementRule {
+        platform_fee_bps: 200,
+        network_fee_bps: 30,
+        settlement_delay_ledger: 7,
+        auto_settle: true,
+    };
+    client.set_default_rule(&admins, &default_rule);
+    assert_resolves_to(&default_rule, "global default");
+
+    // Rung 1: a merchant override outranks everything.
+    let merchant_rule = SettlementRule {
+        platform_fee_bps: 150,
+        network_fee_bps: 20,
+        settlement_delay_ledger: 3,
+        auto_settle: false,
+    };
+    client.set_settlement_rule(&admins, &merchant, &merchant_rule);
+    assert_resolves_to(&merchant_rule, "merchant override");
+
+    // Clearing the override falls back to the global default.
+    client.clear_settlement_rule(&admins, &merchant);
+    assert_resolves_to(&default_rule, "after clear_settlement_rule");
 // Issue #896: get_payments ordering is positional
 // ---------------------------------------------------------------------------
 

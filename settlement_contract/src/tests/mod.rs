@@ -58,3 +58,18 @@ pub fn setup() -> (
     client.init(&deployer, &admins, &1, &governance, &recovery_address);
     (env, client, admins, merchant)
 }
+
+/// Asserts two rules are equal field by field. `SettlementRule` derives
+/// neither `PartialEq` nor `Debug`, so the fields are compared as a tuple to
+/// get a readable diff on failure.
+pub fn assert_rule_eq(actual: &SettlementRule, expected: &SettlementRule, context: &str) {
+    let fields = |r: &SettlementRule| {
+        (
+            r.platform_fee_bps,
+            r.network_fee_bps,
+            r.settlement_delay_ledger,
+            r.auto_settle,
+        )
+    };
+    assert_eq!(fields(actual), fields(expected), "{context}");
+}
