@@ -1331,6 +1331,109 @@ fn execute_recovery_rejects_before_delay() {
     client.execute_recovery();
 }
 
+// Issue #909: execute_recovery before the delay elapses fails with RecoveryDelayActive
+// and preserves the pending record, while execution at or after the delay succeeds,
+// installs the new admin with threshold 1, emits recovery_executed once, and consumes
+// the pending record so a subsequent execute_recovery returns RecoveryNotPending.
+#[test]
+fn execute_recovery_before_delay_rejects_and_preserves_record() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let old_admin = Address::generate(&env);
+    let recovery_address = Address::generate(&env);
+    let new_admin = Address::generate(&env);
+    let governance = register_governance(&env);
+    let contract_id = env.register_contract(None, SettlementContract);
+    let client = SettlementContractClient::new(&env, &contract_id);
+    let admins = soroban_sdk::vec![&env, old_admin.clone()];
+    let deployer = Address::generate(&env);
+    client.init(&deployer, &admins, &1, &governance, &recovery_address);
+
+    let count_events = |topic: &str| -> u32 {
+        let events = env.events().all();
+        let sym = Symbol::new(&env, topic);
+        let mut count = 0;
+        for i in 0..events.len() {
+            let (_, topics, _) = events.get(i).unwrap();
+            if !topics.is_empty() && Symbol::from_val(&env, &topics.get(0).unwrap()) == sym {
+                count += 1;
+            }
+        }
+        count
+    };
+
+    let t0 = env.ledger().timestamp();
+    client.initiate_recovery(&new_admin);
+
+    let expected_execute_after = t0 + RECOVERY_DELAY_SECONDS;
+
+    // 1. At a timestamp less than execute_after, execute_recovery returns SettlementError::RecoveryDelayActive.
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp = expected_execute_after - 1);
+    let early_res = client.try_execute_recovery();
+    assert_eq!(
+        early_res.unwrap_err().unwrap(),
+        soroban_sdk::Error::from_contract_error(SettlementError::RecoveryDelayActive as u32),
+        "execute_recovery before execute_after must fail with RecoveryDelayActive"
+    );
+    assert_eq!(SettlementError::RecoveryDelayActive as u32, 9);
+
+    // 2. read_pending_recovery still returns the record after the early failure.
+    let pending_record = env.as_contract(&client.address, || {
+        crate::storage::read_pending_recovery(&env)
+    });
+    assert_eq!(
+        pending_record.new_admin, new_admin,
+        "read_pending_recovery must return the new admin after early call failure"
+    );
+    assert_eq!(
+        pending_record.execute_after, expected_execute_after,
+        "read_pending_recovery must return the expected execute_after after early call failure"
+    );
+    assert_eq!(
+        pending_record.initiated_by, recovery_address,
+        "read_pending_recovery must preserve initiated_by after early call failure"
+    );
+
+    // Ensure recovery_executed has not been emitted yet.
+    assert_eq!(
+        count_events(bettapay_common::events::RECOVERY_EXECUTED_EVENT),
+        0
+    );
+
+    // 3. At a timestamp equal to execute_after, execute_recovery succeeds and updates the admin set.
+    env.ledger()
+        .with_mut(|ledger| ledger.timestamp = expected_execute_after);
+    client.execute_recovery();
+
+    assert_eq!(
+        client.get_admin(),
+        soroban_sdk::vec![&env, new_admin.clone()],
+        "admin set must be updated to the new recovery target"
+    );
+    assert_eq!(
+        client.get_threshold(),
+        1,
+        "recovery path must install the admin set with threshold 1"
+    );
+
+    // 4. A second execute_recovery returns SettlementError::RecoveryNotPending.
+    let second_res = client.try_execute_recovery();
+    assert_eq!(
+        second_res.unwrap_err().unwrap(),
+        soroban_sdk::Error::from_contract_error(SettlementError::RecoveryNotPending as u32),
+        "second execute_recovery must return RecoveryNotPending"
+    );
+    assert_eq!(SettlementError::RecoveryNotPending as u32, 8);
+
+    // 5. recovery_executed is emitted exactly once on the successful call.
+    assert_eq!(
+        count_events(bettapay_common::events::RECOVERY_EXECUTED_EVENT),
+        1,
+        "recovery_executed must be emitted exactly once on successful execution"
+    );
+}
+
 #[test]
 fn execute_recovery_clears_pending_record() {
     let env = Env::default();
