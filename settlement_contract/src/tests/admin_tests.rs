@@ -943,6 +943,87 @@ fn executes_contract_wasm_upgrade_successfully() {
     assert_eq!(live_client.get_admin(), admins);
 }
 
+// Issue #910: Add a test for pause then upgrade then unpause.
+// Verifies that upgrade succeeds while the contract is paused and emits `contract_upgraded`,
+// while payment entry points (`store_payment_reference`) stay blocked with `SettlementError::Paused`
+// until unpause, at which point payment processing is restored.
+// Also verifies `is_paused` reflects `true` then `false` without raising `AlreadyPaused` or `AlreadyUnpaused`.
+#[test]
+fn pause_then_upgrade_then_unpause() {
+    let (env, client, admins, merchant) = setup();
+    client.register_merchant(&admins, &merchant);
+
+    let count_events = |topic: &str| -> u32 {
+        let events = env.events().all();
+        let sym = Symbol::new(&env, topic);
+        let mut count = 0;
+        for i in 0..events.len() {
+            let (_, topics, _) = events.get(i).unwrap();
+            if !topics.is_empty() && Symbol::from_val(&env, &topics.get(0).unwrap()) == sym {
+                count += 1;
+            }
+        }
+        count
+    };
+
+    // Initially, contract is not paused.
+    assert!(!client.is_paused());
+
+    // 1. Pause transitions is_paused to true (no AlreadyPaused raised).
+    let pause_res = client.try_pause(&admins, &1u32);
+    assert!(pause_res.is_ok(), "pause must succeed without error");
+    assert!(client.is_paused(), "is_paused must reflect true after pause");
+
+    // 2. While paused, store_payment_reference returns SettlementError::Paused.
+    let reference = soroban_sdk::BytesN::from_array(&env, &[1u8; 32]);
+    let amount = 1_000i128;
+    let payment_err = client.try_store_payment_reference(&merchant, &reference, &amount);
+    assert_eq!(
+        payment_err.unwrap_err().unwrap(),
+        soroban_sdk::Error::from_contract_error(SettlementError::Paused as u32),
+        "store_payment_reference while paused must fail with SettlementError::Paused"
+    );
+    assert_eq!(SettlementError::Paused as u32, 5);
+
+    // 3. Upgrade succeeds while paused and emits contract_upgraded.
+    assert_eq!(
+        count_events(bettapay_common::events::CONTRACT_UPGRADED_EVENT),
+        0
+    );
+
+    let good_wasm = soroban_sdk::Bytes::from_slice(
+        &env,
+        include_bytes!("../../../target/wasm32-unknown-unknown/release/settlement_contract.wasm"),
+    );
+    let new_wasm_hash = env.deployer().upload_contract_wasm(good_wasm);
+
+    let upgrade_res = client.try_upgrade(&admins, &new_wasm_hash);
+    assert!(
+        upgrade_res.is_ok(),
+        "upgrade must succeed while the contract is paused"
+    );
+    assert_eq!(
+        count_events(bettapay_common::events::CONTRACT_UPGRADED_EVENT),
+        1,
+        "contract_upgraded event must be emitted on upgrade"
+    );
+
+    // Contract remains paused after the upgrade.
+    assert!(client.is_paused(), "contract must remain paused after upgrade");
+
+    // 4. Unpause restores payment processing (no AlreadyUnpaused raised).
+    let unpause_res = client.try_unpause(&admins);
+    assert!(unpause_res.is_ok(), "unpause must succeed without error");
+    assert!(!client.is_paused(), "is_paused must reflect false after unpause");
+
+    // 5. After unpause, the exact same payment call succeeds.
+    let split = client.store_payment_reference(&merchant, &reference, &amount);
+    assert!(
+        split.merchant_payout_amount > 0,
+        "payment processing must succeed after unpause"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // change_threshold
 // ---------------------------------------------------------------------------
