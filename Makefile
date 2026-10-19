@@ -47,7 +47,7 @@ export_events:
 list_pending_ops:
 	@bash scripts/list_pending_ops.sh $(ARGS)
 
-.PHONY: fmt test check clippy print_msrv msrv doc coverage check_snapshots test_scripts wasm_size check_codeowners all
+.PHONY: fmt test check clippy print_msrv msrv doc coverage check_snapshots test_scripts docs_check wasm_size check_codeowners all
 
 fmt:
 	cargo fmt --all --check
@@ -84,6 +84,10 @@ test_scripts:
 	bash scripts/tests/tooling_smoke_test.sh
 	bash scripts/tests/codeowners_check_test.sh
 	bash scripts/tests/storage_docs_test.sh
+	bash scripts/tests/readme_api_docs_test.sh
+
+docs_check:
+	bash scripts/check_readme_api_docs.sh
 
 wasm_size: optimize
 	bash scripts/check_wasm_size.sh
@@ -91,4 +95,4 @@ wasm_size: optimize
 check_codeowners:
 	bash scripts/check_codeowners.sh
 
-all: fmt check clippy test check_snapshots test_scripts check_codeowners check_interface_parity check_storage_docs wasm_size
+all: fmt check clippy test check_snapshots test_scripts docs_check check_codeowners check_interface_parity check_storage_docs wasm_size

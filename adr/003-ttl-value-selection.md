@@ -42,6 +42,7 @@ The `17280` constant represents the approximate number of ledgers closed per day
 
 - ✅ Payment records remain available for 30 days after the last read (or write), giving ample time for settlement processing.
 - ✅ Admin and governance entries use a much higher TTL (50k/100k ledgers, approximately 3–6 days) since they are instance-storage entries that should never expire under normal operation.
-- ✅ Read operations extend the TTL of the accessed entry (when below threshold), so actively queried entries stay alive.
+- ✅ Explicit keep-alive readers extend the TTL of the accessed entry (when below threshold), so actively maintained records stay alive.
+- ✅ Public readers that do not represent keep-alive intent remain TTL-neutral; the settlement contract's reader registry and TTL tests enforce this distinction.
 - ❌ Payment records and rules that are written once and never re-read will eventually expire after 30 days.
-- ⚠️ The TTL approach adds complexity to every read/write path; each public query function must include a TTL extension call.
+- ⚠️ The TTL approach adds complexity to read paths; each settlement read entry point must be explicitly classified as keep-alive or TTL-neutral.

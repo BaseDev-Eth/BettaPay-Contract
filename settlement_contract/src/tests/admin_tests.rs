@@ -2066,29 +2066,46 @@ fn upgrade_rejects_non_zero_never_uploaded_hash_without_side_effects() {
 #[test]
 fn init_writes_schema_version_marker_and_migrate_is_idempotent() {
     use crate::types::DataKey;
+    use soroban_sdk::xdr::ToXdr;
 
     let (env, client, admins, _merchant) = setup();
 
-    let version = env.as_contract(&client.address, || {
-        env.storage()
-            .instance()
-            .get::<_, u32>(&DataKey::SchemaVersion)
-    });
-    assert_eq!(version, Some(CURRENT_SCHEMA_VERSION));
+    let read_marker = || {
+        env.as_contract(&client.address, || {
+            let version = crate::storage::read_schema_version(&env);
+            let bytes = env
+                .storage()
+                .instance()
+                .get::<_, u32>(&DataKey::SchemaVersion)
+                .expect("init must store the schema version marker")
+                .to_xdr(&env);
+            (version, bytes)
+        })
+    };
+    let (version, bytes_after_init) = read_marker();
+    assert_eq!(version, CURRENT_SCHEMA_VERSION);
 
+    let events_before_first = env.events().all().len();
     client.migrate(&admins);
-    client.migrate(&admins);
-
-    let version_after = env.as_contract(&client.address, || {
-        env.storage()
-            .instance()
-            .get::<_, u32>(&DataKey::SchemaVersion)
-    });
-    assert_eq!(version_after, Some(CURRENT_SCHEMA_VERSION));
-
-    let (_, topics, _) = env.events().all().last().unwrap();
+    let (version_after_first, bytes_after_first) = read_marker();
+    assert_eq!(version_after_first, CURRENT_SCHEMA_VERSION);
+    assert_eq!(bytes_after_first, bytes_after_init);
+    assert_eq!(env.events().all().len(), events_before_first + 1);
+    let (_, first_topics, _) = env.events().all().last().unwrap();
     assert_eq!(
-        Symbol::from_val(&env, &topics.get(0).unwrap()),
+        Symbol::from_val(&env, &first_topics.get(0).unwrap()),
+        Symbol::new(&env, bettapay_common::events::MIGRATED_EVENT)
+    );
+
+    let events_before_second = env.events().all().len();
+    client.migrate(&admins);
+    let (version_after_second, bytes_after_second) = read_marker();
+    assert_eq!(version_after_second, CURRENT_SCHEMA_VERSION);
+    assert_eq!(bytes_after_second, bytes_after_first);
+    assert_eq!(env.events().all().len(), events_before_second + 1);
+    let (_, second_topics, _) = env.events().all().last().unwrap();
+    assert_eq!(
+        Symbol::from_val(&env, &second_topics.get(0).unwrap()),
         Symbol::new(&env, bettapay_common::events::MIGRATED_EVENT)
     );
 }
@@ -2137,7 +2154,7 @@ fn migrate_rejected_for_non_admin() {
 #[should_panic(expected = "Error(Contract, #5)")]
 fn migrate_rejected_while_paused() {
     let (_env, client, admins, _merchant) = setup();
-    client.pause(&admins);
+    client.pause(&admins, &0);
     client.migrate(&admins);
 }
 

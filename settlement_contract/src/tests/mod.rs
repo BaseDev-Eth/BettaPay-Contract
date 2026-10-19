@@ -6,6 +6,7 @@
 
 pub mod admin_tests;
 pub mod conformity_tests;
+pub mod data_key_fuzz_tests;
 pub mod event_topic_conformity_tests;
 pub mod event_topic_registry_tests;
 pub mod fee_bounds_parity_tests;
