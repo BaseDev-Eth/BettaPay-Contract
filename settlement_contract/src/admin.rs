@@ -20,11 +20,12 @@ use crate::policy::{
 };
 use crate::storage::{
     assert_admin_and_not_paused, assert_governance_reachable, assert_not_paused,
+    decrement_pending_operation_count, increment_pending_operation_count,
     is_merchant_registered_and_bump_ttl, is_merchant_registered_internal, read_admin, read_admins,
-    read_fallback_rule, read_governance, read_optional_admins, read_pending_recovery,
-    read_recovery_address, read_rule_or_default, read_schema_version, read_threshold,
-    validate_admins_and_threshold, validate_fee_against_governance, validate_governance,
-    validate_nonzero_address, verify_admin_auth, write_admins,
+    read_fallback_rule, read_governance, read_optional_admins, read_pending_operation_count,
+    read_pending_recovery, read_recovery_address, read_rule_or_default, read_schema_version,
+    read_threshold, validate_admins_and_threshold, validate_fee_against_governance,
+    validate_governance, validate_nonzero_address, verify_admin_auth, write_admins,
 };
 use crate::types::{DataKey, Operation, ScheduledOp, SettlementRule};
 use crate::{SettlementContract, SettlementContractClient};
@@ -451,6 +452,23 @@ impl SettlementContract {
         storage::is_paused(&env)
     }
 
+    /// Returns the number of scheduled operations currently pending in the
+    /// timelock queue (issue #887).
+    ///
+    /// Read-only, callable by anyone, and TTL-neutral: it reads a maintained
+    /// instance-storage counter and extends no TTL. A fresh contract with an
+    /// empty queue returns zero. The counter is incremented by
+    /// [`schedule`](Self::schedule) and decremented by
+    /// [`execute`](Self::execute), [`cancel`](Self::cancel), and
+    /// [`cancel_all`](Self::cancel_all).
+    ///
+    /// Soroban cannot enumerate persistent `ScheduledOperation` keys, so this
+    /// query is the canonical queue-depth metric for operators and indexers;
+    /// see `docs/scheduled-operation-lifecycle.md`.
+    pub fn get_pending_operation_count(env: Env) -> u32 {
+        read_pending_operation_count(&env)
+    }
+
     /// Idempotent schema migration entry point.
     ///
     /// Issue #704: ships the schema-version marker (written at `init`) and a
@@ -568,6 +586,9 @@ impl SettlementContract {
             SCHEDULED_OP_TTL_THRESHOLD,
             SCHEDULED_OP_TTL_BUMP,
         );
+        // Issue #887: keep the queue-depth metric in sync with the persistent
+        // slot that was just written.
+        increment_pending_operation_count(&env);
 
         env.events().publish(
             (Symbol::new(&env, events::OP_SCHEDULED_EVENT), op_hash),
@@ -719,7 +740,7 @@ impl SettlementContract {
             panic_with_error!(&env, SettlementError::OperationNotScheduled);
         }
 
-        env.storage().persistent().remove(&key);
+        Self::consume_scheduled_operation(&env, &key);
 
         env.events().publish(
             (Symbol::new(&env, events::OP_CANCELLED_EVENT), op_hash),
@@ -770,7 +791,7 @@ impl SettlementContract {
                 // match alone does not prove `operation` is what was
                 // scheduled under that slot.
                 if scheduled.operation_xdr == operation_xdr {
-                    env.storage().persistent().remove(&key);
+                    Self::consume_scheduled_operation(&env, &key);
                     cancelled += 1;
                 }
             }
@@ -787,13 +808,15 @@ impl SettlementContract {
 
     /// Consumes a pending `ScheduledOperation` slot.
     ///
-    /// Issue #888: this is the single removal point used by [`execute`]
-    /// (and, from issue #887 onward, the cancel paths). Keeping removal in
-    /// one helper makes the one-shot transition explicit: a scheduled
-    /// operation is deleted before any operation arm can run, so a committed
-    /// execution cannot leave the entry available for replay.
+    /// Issue #888: this is the single removal point used by [`execute`],
+    /// [`cancel`], and [`cancel_all`]. Keeping removal in one helper makes the
+    /// one-shot transition explicit: a scheduled operation is deleted before
+    /// any operation arm can run, so a committed execution cannot leave the
+    /// entry available for replay. Issue #887 also updates the queue-depth
+    /// counter here so every removal path keeps the metric in sync.
     fn consume_scheduled_operation(env: &Env, key: &DataKey) {
         env.storage().persistent().remove(key);
+        decrement_pending_operation_count(env, 1);
     }
 
     /// Timelocked governance update, reached via [`Operation::UpdateGovernance`]
