@@ -600,6 +600,23 @@ impl SettlementContract {
     /// * [`ExecutionNotReady`](SettlementError::ExecutionNotReady) — if the timelock delay has not elapsed.
     /// * [`RecoveryDelayActive`](SettlementError::RecoveryDelayActive) — if a recovery is pending and the operation is
     ///   not `CancelRecovery`.
+    ///
+    /// # One-shot semantics (issue #888)
+    ///
+    /// A scheduled operation is single-use. After every readiness and veto
+    /// check, `execute` consumes the `DataKey::ScheduledOperation` slot
+    /// **before** dispatching to any [`Operation`] arm. No arm can therefore
+    /// run while its slot is still queued, and there is no path through the
+    /// match that returns to the caller with the entry left behind. A
+    /// committed execution can never be replayed: a retry returns
+    /// [`OperationNotScheduled`](SettlementError::OperationNotScheduled).
+    ///
+    /// If an arm traps, Soroban rolls back the whole invocation — including
+    /// the removal and any partial effects — so there is no committed state
+    /// in which the operation ran but its slot stayed queued. The
+    /// [`RecoveryDelayActive`](SettlementError::RecoveryDelayActive) veto is
+    /// checked *before* consumption, deliberately keeping vetoed entries
+    /// queued until the recovery is resolved.
     pub fn execute(env: Env, executor: Address, operation: Operation) {
         assert_not_paused(&env);
         // executor is intentionally not required to authenticate here (permissionless execution after timelock)
@@ -641,7 +658,10 @@ impl SettlementContract {
             panic_with_error!(&env, SettlementError::RecoveryDelayActive);
         }
 
-        env.storage().persistent().remove(&key);
+        // Issue #888: consume the slot before dispatching. Every variant and
+        // every outcome below is reached only through this single removal
+        // point, so a successful execution is a one-shot transition.
+        Self::consume_scheduled_operation(&env, &key);
 
         match operation {
             Operation::UpdateGovernance(new_gov) => {
@@ -764,6 +784,17 @@ impl SettlementContract {
     }
 
     // --- Internal Admin Functions ---
+
+    /// Consumes a pending `ScheduledOperation` slot.
+    ///
+    /// Issue #888: this is the single removal point used by [`execute`]
+    /// (and, from issue #887 onward, the cancel paths). Keeping removal in
+    /// one helper makes the one-shot transition explicit: a scheduled
+    /// operation is deleted before any operation arm can run, so a committed
+    /// execution cannot leave the entry available for replay.
+    fn consume_scheduled_operation(env: &Env, key: &DataKey) {
+        env.storage().persistent().remove(key);
+    }
 
     /// Timelocked governance update, reached via [`Operation::UpdateGovernance`]
     /// from [`execute`](Self::execute).
