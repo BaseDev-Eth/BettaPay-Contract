@@ -507,6 +507,12 @@ impl SettlementContract {
     /// authorized the operation. Removing a missing record is intentionally a
     /// no-op so maintenance callers can safely retry cleanup work.
     ///
+    /// When a record actually exists, it is removed and a single
+    /// `payment_pruned` event is emitted with topics
+    /// `(Symbol("payment_pruned"), merchant, reference)` and data
+    /// `(merchant, reference)` (issue #890). The missing-record no-op path
+    /// emits nothing, so indexers never observe a prune that removed nothing.
+    ///
     /// # Panics
     ///
     /// * [`Paused`](SettlementError::Paused) — if the contract is paused.
@@ -523,10 +529,20 @@ impl SettlementContract {
         // runs before auth so a paused contract consistently reports `Paused`
         // rather than leaking whether the supplied signer set is authorized.
         assert_admin_and_not_paused(&env, &signers);
-        let key = DataKey::Payment(merchant.clone(), reference);
+        let key = DataKey::Payment(merchant.clone(), reference.clone());
         if env.storage().persistent().has(&key) {
             env.storage().persistent().remove(&key);
             decrement_payment_count(&env, &merchant, 1);
+            // Issue #890: one event per actually-removed record. Keeping the
+            // publish inside this branch also keeps the no-op path silent.
+            env.events().publish(
+                (
+                    Symbol::new(&env, events::PAYMENT_PRUNED_EVENT),
+                    merchant.clone(),
+                    reference.clone(),
+                ),
+                (merchant, reference),
+            );
         }
     }
 
