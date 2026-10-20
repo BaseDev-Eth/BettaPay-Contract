@@ -179,7 +179,7 @@
 //! The pause flag blocks payment-processing and merchant-management
 //! operations (`register_merchant`, `unregister_merchant`,
 //! `set_settlement_rule`, `clear_settlement_rule`, `set_default_rule`,
-//! `store_payment_reference`, `update_governance` all call
+//! `store_payment_reference`, `prune_payment`, `update_governance` all call
 //! `assert_not_paused`). The following administrative operations are
 //! intentionally NOT blocked during pause, so the admin can fix the root
 //! cause of the emergency:
